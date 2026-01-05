@@ -10,12 +10,15 @@ export default function TerminalUI({ socket, sessionId, isRunning }) {
   const fitAddon = useRef();
 
   useEffect(() => {
+    // Guard: don't set up terminal listeners if socket not available
+    if (!socket) return;
+
     term.current = new Terminal({
       theme: { background: '#1e1e1e', foreground: '#ffffff' },
       fontSize: 14,
       scrollback: 1000
     });
-    
+
     fitAddon.current = new FitAddon();
     term.current.loadAddon(fitAddon.current);
     term.current.open(terminalRef.current);
@@ -41,7 +44,9 @@ export default function TerminalUI({ socket, sessionId, isRunning }) {
     return () => {
       socket.off('terminal-output', outputHandler);
       window.removeEventListener('resize', handleResize);
-      term.current.dispose();
+      if (term.current) {
+        term.current.dispose();
+      }
     };
   }, [sessionId, socket]);
 
@@ -62,20 +67,20 @@ export default function TerminalUI({ socket, sessionId, isRunning }) {
   //     term.current.write(output);
   //   }
   // }, [sessionId]);
-  
+
   // useEffect(() => {
   //   if (!socket) return;
-    
+
   //   socket.on('terminal-output', outputHandler);
   //   return () => socket.off('terminal-output', outputHandler);
   // }, [socket, outputHandler]);
 
 
-  return <div ref={terminalRef} style={{ width: '100%' }} className='terminal-ui'/>;
+  return <div ref={terminalRef} style={{ width: '100%' }} className='terminal-ui' />;
 }
 
 TerminalUI.propTypes = {
-  socket: PropTypes.object.isRequired,
+  socket: PropTypes.object, // Can be null during reconnection
   sessionId: PropTypes.string.isRequired,
   isRunning: PropTypes.bool.isRequired
 };

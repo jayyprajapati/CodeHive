@@ -3,13 +3,14 @@ import { useNavigate, useLocation, useParams } from "react-router-dom";
 import Editor from "@monaco-editor/react";
 import Split from "react-split";
 import { useAuth } from "../contexts/AuthContext";
-import useSocket from "../hooks/useSocket";
+import useSocket, { ConnectionState } from "../hooks/useSocket";
 import Loader from "../components/Loader";
 import Chat from "../components/Chat";
 import RoleManager from "../components/RoleManager";
 import TerminalUI from "../components/TerminalUI";
+import ConnectionStatus from "../components/ConnectionStatus";
 import { CopyToClipboard } from "react-copy-to-clipboard";
-import {Check, Clipboard, Key, EllipsisVertical} from 'lucide-react'
+import { Check, Clipboard, Key, EllipsisVertical } from 'lucide-react'
 
 import Button from '../components/Button';
 
@@ -31,7 +32,17 @@ export default function EditorPage() {
   const navigate = useNavigate();
   const { sessionId } = useParams();
   const location = useLocation();
-  const { socket, isConnected } = useSocket();
+
+  // Use the enhanced useSocket hook with explicit connection states
+  const {
+    socket,
+    isConnected,
+    connectionState,
+    error: connectionError,
+    reconnectInfo,
+    reconnect
+  } = useSocket({ roomId: sessionId });
+
   const { currentUser } = useAuth();
   const editorRef = useRef(null);
   const debounceTimeoutRef = useRef(null);
@@ -197,7 +208,7 @@ export default function EditorPage() {
   const handleNewMessage = useCallback((message) => {
     socket.emit("chat-message", { sessionId, message, user: currentUser.displayName });
   }, [socket, sessionId, currentUser]);
-  
+
   const handleCopy = (type) => {
     setUiState((prev) => ({ ...prev, [type]: true }));
     setTimeout(() => setUiState((prev) => ({ ...prev, [type]: false })), 1500);
@@ -210,12 +221,23 @@ export default function EditorPage() {
     automaticLayout: true,
   };
 
-  if (!isConnected || !currentUser) {
+  // Show loader during initial connection, if user not authenticated, or if socket not yet available
+  // This ensures TerminalUI and Chat components receive a valid socket prop
+  // Once connected, the ConnectionStatus component handles reconnection states visually
+  if (!socket || connectionState === ConnectionState.CONNECTING || !currentUser) {
     return <Loader />;
   }
 
   return (
     <div className="editor-container">
+      {/* Connection status indicator - only visible during issues */}
+      <ConnectionStatus
+        connectionState={connectionState}
+        reconnectInfo={reconnectInfo}
+        error={connectionError}
+        onRetry={reconnect}
+      />
+
       <div className="editor-header">
         <div className="session-details">
           <h2>{sessionId}</h2>
@@ -303,7 +325,7 @@ export default function EditorPage() {
           <div className="h-full">
             <div className="editor-head">
               <div className="editor-title">
-                 <span>Editor</span>
+                <span>Editor</span>
               </div>
               <div className="editor-file-name">
                 Code.{language === "javascript" ? "js" : language === "python" ? "py" : "java"}

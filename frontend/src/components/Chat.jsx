@@ -38,27 +38,26 @@ export default function Chat({ socket, sessionId, currentUser, messages, onNewMe
         {messages.map((msg, i) => (
           <div
             key={i}
-            className={`message ${
-              msg.type === "system" ? "system-message" : ""
-            }`}
+            className={`message ${msg.type === "system" ? "system-message" : ""
+              }`}
           >
             {msg.type === "system" ? (
               <em>{msg.message}</em>
             ) : (
               <>
-              <div  className={`user-message ${msg.user == currentUser.displayName ? "message-sender" : ""}`}>
-                <div>
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" style={{color: '#999'}}>
-                    <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
-                  </svg>
+                <div className={`user-message ${msg.user == currentUser.displayName ? "message-sender" : ""}`}>
+                  <div>
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" style={{ color: '#999' }}>
+                      <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
+                    </svg>
+                  </div>
+                  <div className="message-text">
+                    <div className="message-sender-name">{msg.user}</div>
+                    <div className={`message-content ${msg.user == currentUser.displayName ? "message-sender-content" : ""}`}>{msg.message}</div>
+                  </div>
                 </div>
-              <div className="message-text">
-              <div className="message-sender-name">{msg.user}</div>
-              <div className={`message-content ${msg.user == currentUser.displayName ? "message-sender-content" : ""}`}>{msg.message}</div>
-              </div>
-              </div>
-              
-              
+
+
                 {/* <strong>{msg.user}:</strong> {msg.message} */}
               </>
             )}
@@ -66,23 +65,23 @@ export default function Chat({ socket, sessionId, currentUser, messages, onNewMe
         ))}
       </div>
 
-        <div className="send-chat-input">
-          <form onSubmit={sendMessage} className="chat-form">
-            <input
-              type="text"
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              placeholder="Send a message..."
-              className="chat-input"
-            />
-            <button type="submit" className="chat-send-btn">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
-              </svg>
-            </button>
-          </form>
-        </div>
-      
+      <div className="send-chat-input">
+        <form onSubmit={sendMessage} className="chat-form">
+          <input
+            type="text"
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            placeholder="Send a message..."
+            className="chat-input"
+          />
+          <button type="submit" className="chat-send-btn">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+            </svg>
+          </button>
+        </form>
+      </div>
+
 
       {/* <form onSubmit={sendMessage}>
         <input
@@ -98,7 +97,7 @@ export default function Chat({ socket, sessionId, currentUser, messages, onNewMe
 }
 
 Chat.propTypes = {
-  socket: PropTypes.object.isRequired,
+  socket: PropTypes.object, // Can be null during reconnection
   sessionId: PropTypes.string.isRequired,
   currentUser: PropTypes.object.isRequired,
   messages: PropTypes.array.isRequired,
