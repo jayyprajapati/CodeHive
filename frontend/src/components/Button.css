@@ -1,0 +1,157 @@
+/* Custom Button Component Styles */
+.custom-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-weight: 600;
+  text-decoration: none;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+  user-select: none;
+  outline: none;
+}
+
+/* Button Variants */
+.custom-btn--primary {
+  background: linear-gradient(135deg, #4a90e2 0%, #2c5282 100%);
+  color: white;
+  box-shadow: 0 4px 15px 0 rgba(74, 144, 226, 0.4);
+}
+
+.custom-btn--primary:hover:not(.custom-btn--disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px 0 rgba(74, 144, 226, 0.6);
+}
+
+.custom-btn--secondary {
+  background: transparent;
+  color: #4a90e2;
+  border: 2px solid #4a90e2;
+}
+
+.custom-btn--secondary:hover:not(.custom-btn--disabled) {
+  background: #4a90e2;
+  color: white;
+  transform: translateY(-2px);
+}
+
+.custom-btn--success {
+  background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+  color: white;
+  box-shadow: 0 4px 15px 0 rgba(76, 175, 80, 0.4);
+}
+
+.custom-btn--success:hover:not(.custom-btn--disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px 0 rgba(76, 175, 80, 0.6);
+}
+
+.custom-btn--error {
+  background: linear-gradient(135deg, #f44336 0%, #d32f2f 100%);
+  color: white;
+  box-shadow: 0 4px 15px 0 rgba(244, 67, 54, 0.4);
+}
+
+.custom-btn--error:hover:not(.custom-btn--disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px 0 rgba(244, 67, 54, 0.6);
+}
+
+.custom-btn--warning {
+  background: linear-gradient(135deg, #ff9800 0%, #f57c00 100%);
+  color: white;
+  box-shadow: 0 4px 15px 0 rgba(255, 152, 0, 0.4);
+}
+
+.custom-btn--warning:hover:not(.custom-btn--disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px 0 rgba(255, 152, 0, 0.6);
+}
+
+/* Button Sizes */
+.custom-btn--small {
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  min-height: 36px;
+}
+
+.custom-btn--medium {
+  padding: 0.75rem 1.5rem;
+  font-size: 1rem;
+  min-height: 44px;
+}
+
+.custom-btn--large {
+  padding: 1rem 2rem;
+  font-size: 1.125rem;
+  min-height: 52px;
+}
+
+/* Disabled State */
+.custom-btn--disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+/* Icon styles */
+.custom-btn__icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+.custom-btn__text {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Ripple effect */
+.custom-btn::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.3);
+  transform: translate(-50%, -50%);
+  transition: width 0.6s, height 0.6s;
+}
+
+.custom-btn:active:not(.custom-btn--disabled)::before {
+  width: 300px;
+  height: 300px;
+}
+
+/* Focus styles */
+.custom-btn:focus-visible {
+  outline: 2px solid #4a90e2;
+  outline-offset: 2px;
+}
+
+/* Loading state */
+.custom-btn--loading {
+  pointer-events: none;
+}
+
+.custom-btn--loading .custom-btn__text {
+  opacity: 0.7;
+}
+
+/* Spin animation for loading icons */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.custom-btn__icon--spinning {
+  animation: spin 1s linear infinite;
+}

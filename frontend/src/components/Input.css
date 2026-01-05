@@ -1,0 +1,138 @@
+/* Custom Input Component Styles */
+.custom-input-wrapper {
+  width: 100%;
+  margin-bottom: 0.5rem;
+}
+
+.custom-input {
+  position: relative;
+  width: 100%;
+  background: rgba(255, 255, 255, 0.05);
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  backdrop-filter: blur(10px);
+}
+
+.custom-input--focused {
+  border-color: #4a90e2;
+  box-shadow: 0 0 0 3px rgba(74, 144, 226, 0.1);
+}
+
+.custom-input--error {
+  border-color: #f44336;
+}
+
+.custom-input--error.custom-input--focused {
+  box-shadow: 0 0 0 3px rgba(244, 67, 54, 0.1);
+}
+
+.custom-input--disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.custom-input__field {
+  width: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.9);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-weight: 500;
+  border-radius: 12px;
+  transition: all 0.3s ease;
+}
+
+.custom-input__field::placeholder {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.custom-input__field:disabled {
+  cursor: not-allowed;
+}
+
+/* Sizes */
+.custom-input--small .custom-input__field {
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  min-height: 20px;
+}
+
+.custom-input--medium .custom-input__field {
+  padding: 1rem 1.25rem;
+  font-size: 1rem;
+  min-height: 24px;
+}
+
+.custom-input--large .custom-input__field {
+  padding: 1.25rem 1.5rem;
+  font-size: 1.125rem;
+  min-height: 28px;
+}
+
+/* Floating Label */
+.custom-input__label {
+  position: absolute;
+  left: 1.25rem;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 1rem;
+  font-weight: 500;
+  pointer-events: none;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  background: rgba(26, 26, 26, 0.8);
+  padding: 0 0.5rem;
+  border-radius: 4px;
+}
+
+.custom-input--medium .custom-input__label {
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.custom-input--small .custom-input__label {
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.875rem;
+  left: 1rem;
+}
+
+.custom-input--large .custom-input__label {
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 1.125rem;
+  left: 1.5rem;
+}
+
+.custom-input__label--floating {
+  top: 0;
+  transform: translateY(-50%);
+  font-size: 0.875rem !important;
+  color: #4a90e2;
+}
+
+.custom-input--error .custom-input__label--floating {
+  color: #f44336;
+}
+
+/* Helper Text */
+.custom-input__helper {
+  margin-top: 0.5rem;
+  padding-left: 1rem;
+  font-size: 0.875rem;
+  color: rgba(255, 255, 255, 0.6);
+  font-weight: 500;
+}
+
+.custom-input__helper--error {
+  color: #f44336;
+}
+
+/* Autofill styles */
+.custom-input__field:-webkit-autofill,
+.custom-input__field:-webkit-autofill:hover,
+.custom-input__field:-webkit-autofill:focus {
+  -webkit-text-fill-color: rgba(255, 255, 255, 0.9);
+  -webkit-box-shadow: 0 0 0px 1000px rgba(255, 255, 255, 0.05) inset;
+  transition: background-color 5000s ease-in-out 0s;
+}

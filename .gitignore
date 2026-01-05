@@ -1,0 +1,92 @@
+####################################
+# Dependencies
+####################################
+node_modules/
+**/node_modules/
+
+####################################
+# Build outputs
+####################################
+dist/
+build/
+**/dist/
+**/build/
+
+.next/
+out/
+coverage/
+
+####################################
+# Environment variables
+####################################
+.env
+.env.local
+.env.development
+.env.production
+.env.test
+
+# Keep examples
+!.env.example
+
+####################################
+# Logs
+####################################
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+####################################
+# Runtime data
+####################################
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+####################################
+# OS / Editor junk
+####################################
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+Thumbs.db
+ehthumbs.db
+
+####################################
+# IDEs
+####################################
+.vscode/
+!.vscode/extensions.json
+
+.idea/
+*.iml
+
+####################################
+# Testing
+####################################
+coverage/
+.nyc_output/
+
+####################################
+# Misc
+####################################
+*.swp
+*.swo
+*.tmp
+*.bak
+
+####################################
+# Optional: lock files (choose wisely)
+####################################
+# If you want a single package manager across repo, keep these
+# Otherwise uncomment to ignore others
+
+# yarn.lock
+# pnpm-lock.yaml
+# package-lock.json

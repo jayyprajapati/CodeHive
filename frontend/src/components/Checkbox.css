@@ -1,0 +1,101 @@
+/* Custom Checkbox Component Styles */
+.custom-checkbox-wrapper {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  cursor: pointer;
+  user-select: none;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.9);
+  transition: all 0.3s ease;
+}
+
+.custom-checkbox-wrapper:hover:not(.custom-checkbox-wrapper--disabled) {
+  color: rgba(255, 255, 255, 1);
+}
+
+.custom-checkbox-wrapper--disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.custom-checkbox__input {
+  position: absolute;
+  opacity: 0;
+  cursor: pointer;
+  height: 0;
+  width: 0;
+}
+
+.custom-checkbox__checkmark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 6px;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+.custom-checkbox__icon {
+  width: 12px;
+  height: 12px;
+  color: white;
+  opacity: 0;
+  transform: scale(0.5);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Checked state */
+.custom-checkbox__input:checked + .custom-checkbox__checkmark {
+  background: linear-gradient(135deg, #4a90e2 0%, #2c5282 100%);
+  border-color: #4a90e2;
+  box-shadow: 0 4px 15px 0 rgba(74, 144, 226, 0.4);
+}
+
+.custom-checkbox__input:checked + .custom-checkbox__checkmark .custom-checkbox__icon {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* Hover state */
+.custom-checkbox-wrapper:hover:not(.custom-checkbox-wrapper--disabled) .custom-checkbox__checkmark {
+  border-color: #4a90e2;
+  background: rgba(74, 144, 226, 0.1);
+}
+
+/* Focus state */
+.custom-checkbox__input:focus + .custom-checkbox__checkmark {
+  outline: 2px solid #4a90e2;
+  outline-offset: 2px;
+}
+
+/* Label */
+.custom-checkbox__label {
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+/* Ripple effect */
+.custom-checkbox__checkmark::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-radius: 50%;
+  background: rgba(74, 144, 226, 0.3);
+  transform: translate(-50%, -50%);
+  transition: width 0.3s, height 0.3s;
+}
+
+.custom-checkbox__input:active + .custom-checkbox__checkmark::before {
+  width: 40px;
+  height: 40px;
+}
