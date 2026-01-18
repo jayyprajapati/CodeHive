@@ -16,9 +16,6 @@
  */
 
 const { Server } = require('socket.io');
-const Docker = require('dockerode');
-const { Buffer } = require('buffer');
-const axios = require('axios');
 const { Session } = require('./Models/Session');
 const {
   verifySession,
@@ -28,24 +25,28 @@ const {
   isCodeSafe
 } = require('./middleware/SessionManagement');
 const logger = require('./utils/logger');
+const { executionManager } = require('./services/executionManager');
 
 // ============================================================================
 // Constants
 // ============================================================================
 
-const PISTON_API_URL = 'https://emkc.org/api/v2/piston/execute';
-const ALLOWED_LANGUAGES = {
-  javascript: { version: '18.15.0' },
-  python: { version: '3.10.0' },
-  java: { version: '15.0.2' }
+const SUPPORTED_LANGUAGES = {
+  javascript: { file: 'main.js', run: 'node main.js' }
 };
 
-// Maximum output length to prevent memory issues
-const MAX_OUTPUT_LENGTH = 2000;
+const DEFAULT_LANGUAGE = 'javascript';
+const MAX_STDIN_CHARS = 64 * 1024; // Keep stdin bursts bounded
 
-// Execution timeouts
-const COMPILE_TIMEOUT = 10000;
-const RUN_TIMEOUT = 5000;
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+async function getSessionWithMembership(sessionId, socketId) {
+  const session = await getSession(sessionId);
+  const isMember = session?.users?.some(u => u.socketId === socketId) || false;
+  return { session, isMember };
+}
 
 // ============================================================================
 // Socket Server Initialization
@@ -68,15 +69,29 @@ const initSocket = (httpServer) => {
     transports: ['websocket']
   });
 
-  // Docker instance for potential local execution (not currently used)
-  const docker = new Docker();
-
   // ============================================================================
   // Connection Handler
   // ============================================================================
 
   io.on('connect', (socket) => {
     logger.socket('client_connected', { socketId: socket.id });
+
+    const joinedSessions = new Set();
+
+    const terminalHooks = (sessionId) => ({
+      onOutput: (chunk) => io.to(sessionId).emit('terminal-output', {
+        sessionId,
+        output: chunk
+      }),
+      onExit: (reason) => io.to(sessionId).emit('terminal-closed', {
+        sessionId,
+        reason
+      })
+    });
+
+    const ensureTerminal = async (sessionId) => {
+      await executionManager.ensureSession(sessionId, terminalHooks(sessionId));
+    };
 
     // --------------------------------------------------------------------------
     // ROOM LIFECYCLE: Join Session
@@ -158,6 +173,9 @@ const initSocket = (httpServer) => {
           chat: updatedSession.chat,
           role: updatedSession.users.find(u => u.socketId === socket.id)?.role || 'viewer'
         });
+
+        await executionManager.registerClient(sessionId, terminalHooks(sessionId));
+        joinedSessions.add(sessionId);
 
       } catch (error) {
         logger.error('join-session handler failed', error, {
@@ -269,6 +287,8 @@ const initSocket = (httpServer) => {
         // Delete session from database
         await Session.deleteOne({ sessionId });
 
+        await executionManager.shutdown(sessionId, 'owner_ended', true);
+
         logger.room('session_destroyed', {
           sessionId,
           reason: 'owner_ended',
@@ -326,6 +346,9 @@ const initSocket = (httpServer) => {
         // Leave socket room
         socket.leave(sessionId);
 
+        await executionManager.deregisterClient(sessionId);
+        joinedSessions.delete(sessionId);
+
         logger.room('user_left', {
           sessionId,
           userName: user.name,
@@ -343,6 +366,7 @@ const initSocket = (httpServer) => {
         if (updatedSession && updatedSession.users.length === 0) {
           logger.room('session_destroying_empty', { sessionId });
           await Session.deleteOne({ sessionId });
+          await executionManager.shutdown(sessionId, 'room_empty');
           logger.room('session_destroyed', { sessionId, reason: 'empty' });
         }
 
@@ -433,98 +457,158 @@ const initSocket = (httpServer) => {
     });
 
     // --------------------------------------------------------------------------
-    // Code Execution
+    // Interactive Terminal
     // --------------------------------------------------------------------------
 
+    socket.on('terminal-input', async (data = {}) => {
+      try {
+        const { sessionId, input } = data;
+
+        if (!sessionId || !input) return;
+        if (typeof input !== 'string' || input.length > MAX_STDIN_CHARS) {
+          return socket.emit('error', {
+            message: 'Input too large',
+            code: 'STDIN_TOO_LARGE'
+          });
+        }
+
+        const { session, isMember } = await getSessionWithMembership(sessionId, socket.id);
+        if (!session || !isMember) {
+          return socket.emit('error', {
+            message: 'You are not part of this session',
+            code: 'NOT_IN_SESSION'
+          });
+        }
+
+        await ensureTerminal(sessionId);
+        await executionManager.write(sessionId, input);
+
+      } catch (error) {
+        logger.error('terminal-input handler failed', error, { sessionId: data?.sessionId });
+        socket.emit('error', {
+          message: 'Failed to send input to terminal',
+          code: 'TERMINAL_INPUT_ERROR'
+        });
+      }
+    });
+
+    socket.on('terminal-resize', async (data = {}) => {
+      try {
+        const { sessionId, cols, rows } = data;
+        if (!sessionId || !cols || !rows) return;
+
+        const { session, isMember } = await getSessionWithMembership(sessionId, socket.id);
+        if (!session || !isMember) return;
+
+        await executionManager.resize(sessionId, cols, rows);
+      } catch (error) {
+        logger.warn('terminal-resize handler failed', { error: error.message, sessionId: data?.sessionId });
+      }
+    });
+
+    socket.on('terminal-shutdown', async (data = {}) => {
+      try {
+        const { sessionId, userId, force } = data;
+        if (!sessionId) return;
+
+        const session = await getSession(sessionId);
+        if (!session) {
+          return socket.emit('error', {
+            message: 'Session not found',
+            code: 'SESSION_NOT_FOUND'
+          });
+        }
+
+        if (session.owner !== userId) {
+          return socket.emit('error', {
+            message: 'Only the session owner can stop the terminal',
+            code: 'UNAUTHORIZED'
+          });
+        }
+
+        await executionManager.shutdown(sessionId, 'manual_shutdown', !!force);
+        io.to(sessionId).emit('terminal-closed', { sessionId, reason: 'manual_shutdown' });
+
+      } catch (error) {
+        logger.error('terminal-shutdown handler failed', error, { sessionId: data?.sessionId });
+        socket.emit('error', {
+          message: 'Failed to stop terminal',
+          code: 'TERMINAL_STOP_ERROR'
+        });
+      }
+    });
+
     /**
-     * Handle code execution requests.
-     * Uses Piston API for sandboxed code execution.
-     * 
-     * @emits 'terminal-output' - Execution output to all room members
-     * @emits 'execution-complete' - Signal that execution finished
-     * @emits 'error' - If execution fails
+     * Handle code execution requests by streaming into the room's persistent shell.
+     * This keeps the terminal interactive while still honoring the existing API.
      */
-    socket.on('run-code', async (data) => {
-      const { sessionId, code, language } = data;
+    socket.on('run-code', async (data = {}) => {
+      const { sessionId, code = '', language } = data;
 
       logger.debug('code_execution_requested', { sessionId, language });
 
-      // Validate session
-      const session = await getSession(sessionId);
-      if (!session || !session.active) {
-        return socket.emit('error', {
-          message: 'Invalid session',
-          code: 'SESSION_INVALID'
-        });
-      }
-
-      // Security check on code
-      if (!isCodeSafe(code, language)) {
-        logger.warn('code_execution_blocked: unsafe_code', {
-          sessionId,
-          language
-        });
-        return io.to(sessionId).emit('terminal-output', {
-          sessionId,
-          output: "Error: Code contains prohibited patterns\n"
-        });
-      }
-
       try {
-        // Execute via Piston API
-        const response = await axios.post(PISTON_API_URL, {
-          language: language,
-          version: ALLOWED_LANGUAGES[language].version,
-          files: [{ content: code }],
-          stdin: '',
-          args: [],
-          compile_timeout: COMPILE_TIMEOUT,
-          run_timeout: RUN_TIMEOUT,
-          compile_memory_limit: -1,
-          run_memory_limit: -1
-        });
+        const { session, isMember } = await getSessionWithMembership(sessionId, socket.id);
 
-        const result = response.data;
-        let output = '';
-
-        // Handle compilation errors
-        if (result.compile && result.compile.stderr) {
-          output += `Compilation Error:\n${result.compile.stderr}\n`;
+        if (!session || !session.active) {
+          return socket.emit('error', {
+            message: 'Invalid session',
+            code: 'SESSION_INVALID'
+          });
         }
 
-        // Handle runtime errors
-        if (result.run.stderr) {
-          output += `Runtime Error:\n${result.run.stderr}\n`;
+        if (!isMember) {
+          return socket.emit('error', {
+            message: 'You are not part of this session',
+            code: 'NOT_IN_SESSION'
+          });
         }
 
-        // Handle standard output
-        if (result.run.stdout) {
-          output += `Output:\n${result.run.stdout}\n`;
+        const langKey = SUPPORTED_LANGUAGES[language] ? language : DEFAULT_LANGUAGE;
+        const langConfig = SUPPORTED_LANGUAGES[langKey];
+
+        if (!SUPPORTED_LANGUAGES[language] && language) {
+          io.to(sessionId).emit('terminal-output', {
+            sessionId,
+            output: `[server] Language ${language} not enabled; using ${langKey}.\n`
+          });
         }
 
-        // Sanitize and limit output length
-        const sanitizedOutput = output
-          .replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '')
-          .slice(0, MAX_OUTPUT_LENGTH);
+        if (!isCodeSafe(code, langKey)) {
+          logger.warn('code_execution_blocked: unsafe_code', { sessionId, language: langKey });
+          return io.to(sessionId).emit('terminal-output', {
+            sessionId,
+            output: 'Error: Code contains prohibited patterns\n'
+          });
+        }
 
-        // Send output to all room members
+        await ensureTerminal(sessionId);
+
+        const delimiter = `CODE_EOF_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+        const payload = [
+          `cat <<'${delimiter}' > ${langConfig.file}`,
+          code,
+          delimiter,
+          langConfig.run
+        ].join('\n');
+
         io.to(sessionId).emit('terminal-output', {
           sessionId,
-          output: sanitizedOutput
+          output: `[server] Writing ${langConfig.file} and executing inside sandbox...\n`
         });
 
-        // Signal execution complete
+        await executionManager.write(sessionId, `${payload}\n`);
+
+        // Let the UI know the request has been queued; the terminal stream remains live for results
         io.to(sessionId).emit('execution-complete', { sessionId });
 
-        logger.debug('code_execution_complete', { sessionId, language });
+        logger.debug('code_execution_queued', { sessionId, language: langKey });
 
       } catch (error) {
         logger.error('run-code handler failed', error, { sessionId, language });
-
-        const errorMessage = error.response?.data?.output || error.message;
         io.to(sessionId).emit('terminal-output', {
           sessionId,
-          output: `Execution error: ${errorMessage}\n`
+          output: `Execution error: ${error.message}\n`
         });
       }
     });
@@ -563,6 +647,9 @@ const initSocket = (httpServer) => {
               userName: user.name
             });
 
+            await executionManager.deregisterClient(session.sessionId);
+            joinedSessions.delete(session.sessionId);
+
             // Notify room
             io.to(session.sessionId).emit('user-left', {
               user: user.name,
@@ -576,6 +663,7 @@ const initSocket = (httpServer) => {
                 sessionId: session.sessionId
               });
               await Session.deleteOne({ sessionId: session.sessionId });
+              await executionManager.shutdown(session.sessionId, 'empty_after_disconnect');
               logger.room('session_destroyed', {
                 sessionId: session.sessionId,
                 reason: 'empty_after_disconnect'
