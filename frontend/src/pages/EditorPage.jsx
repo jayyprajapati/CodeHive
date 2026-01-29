@@ -17,7 +17,7 @@ import Button from '../components/Button';
 const LANGUAGE_TEMPLATES = {
   python: "# New Python Session Started\n\n",
   javascript: "// New JavaScript Session Started\n\n",
-  java: `public class code {\n    public static void main(String[] args) {\n        // New Java Session Started. Do not change the template. Start coding from here.\n        \n\n    }\n}\n`,
+  java: `public class Code {\n    public static void main(String[] args) {\n        // New Java Session Started. Do not change the template. Start coding from here.\n        \n\n    }\n}\n`,
 };
 
 const langOptions = ["javascript", "python", "java"];
