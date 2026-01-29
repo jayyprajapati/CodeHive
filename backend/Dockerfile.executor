@@ -1,15 +1,14 @@
 # CodeHive Multi-Language Execution Environment
 # Supports: JavaScript (Node.js), Python 3, Java (OpenJDK)
+# For ARM64 Mac compatibility
 
-FROM alpine:3.19
+FROM amazoncorretto:17-alpine
 
-# Install runtimes
+# Install Node.js and Python
 RUN apk add --no-cache \
     nodejs \
     npm \
     python3 \
-    openjdk17-jre-headless \
-    openjdk17-jdk \
     && adduser -D -u 1000 codeuser
 
 # Set up workspace

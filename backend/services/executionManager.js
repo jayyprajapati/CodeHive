@@ -4,7 +4,7 @@ const stream = require('stream');
 const logger = require('../utils/logger');
 
 // Resource and lifecycle configuration
-const EXECUTION_IMAGE = process.env.EXECUTION_IMAGE || 'node:20-alpine';
+const EXECUTION_IMAGE = process.env.EXECUTION_IMAGE || 'codehive-executor';
 const CPU_NANOS = Number(process.env.EXECUTION_NANO_CPUS || 500_000_000); // 0.5 CPU
 const MEMORY_LIMIT_BYTES = Number(process.env.EXECUTION_MEMORY_BYTES || 512 * 1024 * 1024); // 512 MB
 const PIDS_LIMIT = Number(process.env.EXECUTION_PIDS_LIMIT || 64);
@@ -71,8 +71,8 @@ class ExecutionManager {
     const container = await this.docker.createContainer({
       Image: EXECUTION_IMAGE,
       Cmd: ['/bin/sh'],
-      User: 'node',
-      WorkingDir: '/home/node/workspace',
+      User: 'codeuser',
+      WorkingDir: '/home/codeuser/workspace',
       Tty: true,
       OpenStdin: true,
       StdinOnce: false,
@@ -90,8 +90,8 @@ class ExecutionManager {
         CapDrop: ['ALL'],
         SecurityOpt: ['no-new-privileges'],
         Tmpfs: {
-          // uid=1000,gid=1000 ensures node user can write
-          '/home/node/workspace': 'rw,exec,size=134217728,uid=1000,gid=1000',
+          // uid=1000,gid=1000 ensures codeuser can write
+          '/home/codeuser/workspace': 'rw,exec,size=134217728,uid=1000,gid=1000',
           '/tmp': 'rw,size=67108864,uid=1000,gid=1000'
         }
       }

@@ -545,8 +545,8 @@ const initSocket = (httpServer) => {
       }
     });
     /**
-     * Handle code execution requests using Docker exec for clean output.
-     * Only shows code output, not shell commands.
+     * Handle code execution requests by injecting commands into the PTY shell.
+     * This enables interactive stdin support for programs like Python input().
      */
     socket.on('run-code', async (data = {}) => {
       const { sessionId, code = '', language } = data;
@@ -588,31 +588,26 @@ const initSocket = (httpServer) => {
           });
         }
 
-        // Ensure container is running
+        // Ensure container is running with multi-language support
         await ensureTerminal(sessionId);
 
-        // Execute code in a temporary container with the language-specific runtime
-        const result = await executionManager.runInTempContainer({
-          image: langConfig.image,
+        // Use heredoc to write code file and run it through the PTY
+        // This allows interactive stdin since the PTY has live terminal I/O
+        const delimiter = `EOF_${Date.now()}`;
+        const commands = [
+          `cat > ${langConfig.file} << '${delimiter}'`,
           code,
-          filename: langConfig.file,
-          runCmd: langConfig.run,
-          onOutput: (output) => {
-            // Stream output to terminal
-            io.to(sessionId).emit('terminal-output', {
-              sessionId,
-              output
-            });
-          }
-        });
+          delimiter,
+          langConfig.run
+        ].join('\n');
 
-        // Notify execution complete
-        io.to(sessionId).emit('execution-complete', {
-          sessionId,
-          exitCode: result.exitCode
-        });
+        // Write commands to the PTY shell
+        await executionManager.write(sessionId, commands + '\n');
 
-        logger.debug('code_execution_complete', { sessionId, language: langKey, exitCode: result.exitCode });
+        // Notify that execution has started (output streams via PTY)
+        io.to(sessionId).emit('execution-started', { sessionId, language: langKey });
+
+        logger.debug('code_execution_started', { sessionId, language: langKey });
 
       } catch (error) {
         logger.error('run-code handler failed', error, { sessionId, language });
