@@ -396,7 +396,6 @@ export default function EditorPage() {
             <TerminalUI
               socket={socket}
               sessionId={sessionId}
-              isRunning={isCodeRunning}
             />
             <Chat
               socket={socket}

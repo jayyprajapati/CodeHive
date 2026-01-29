@@ -32,7 +32,9 @@ const { executionManager } = require('./services/executionManager');
 // ============================================================================
 
 const SUPPORTED_LANGUAGES = {
-  javascript: { file: 'main.js', run: 'node main.js' }
+  javascript: { file: 'main.js', run: 'node main.js', image: 'node:20-alpine' },
+  python: { file: 'main.py', run: 'python main.py', image: 'python:3.12-alpine' },
+  java: { file: 'Code.java', run: 'javac Code.java && java Code', image: 'amazoncorretto:17-alpine' }
 };
 
 const DEFAULT_LANGUAGE = 'javascript';
@@ -79,10 +81,14 @@ const initSocket = (httpServer) => {
     const joinedSessions = new Set();
 
     const terminalHooks = (sessionId) => ({
-      onOutput: (chunk) => io.to(sessionId).emit('terminal-output', {
-        sessionId,
-        output: chunk
-      }),
+      onOutput: (chunk) => {
+        const output = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk ?? '');
+        logger.debug('terminal_chunk', { sessionId, sample: output.slice(0, 120) });
+        io.to(sessionId).emit('terminal-output', {
+          sessionId,
+          output
+        });
+      },
       onExit: (reason) => io.to(sessionId).emit('terminal-closed', {
         sessionId,
         reason
@@ -474,6 +480,7 @@ const initSocket = (httpServer) => {
 
         const { session, isMember } = await getSessionWithMembership(sessionId, socket.id);
         if (!session || !isMember) {
+          logger.warn('terminal_input_rejected', { sessionId, socketId: socket.id, hasSession: !!session, isMember });
           return socket.emit('error', {
             message: 'You are not part of this session',
             code: 'NOT_IN_SESSION'
@@ -537,10 +544,9 @@ const initSocket = (httpServer) => {
         });
       }
     });
-
     /**
-     * Handle code execution requests by streaming into the room's persistent shell.
-     * This keeps the terminal interactive while still honoring the existing API.
+     * Handle code execution requests using Docker exec for clean output.
+     * Only shows code output, not shell commands.
      */
     socket.on('run-code', async (data = {}) => {
       const { sessionId, code = '', language } = data;
@@ -582,27 +588,31 @@ const initSocket = (httpServer) => {
           });
         }
 
+        // Ensure container is running
         await ensureTerminal(sessionId);
 
-        const delimiter = `CODE_EOF_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
-        const payload = [
-          `cat <<'${delimiter}' > ${langConfig.file}`,
+        // Execute code in a temporary container with the language-specific runtime
+        const result = await executionManager.runInTempContainer({
+          image: langConfig.image,
           code,
-          delimiter,
-          langConfig.run
-        ].join('\n');
-
-        io.to(sessionId).emit('terminal-output', {
-          sessionId,
-          output: `[server] Writing ${langConfig.file} and executing inside sandbox...\n`
+          filename: langConfig.file,
+          runCmd: langConfig.run,
+          onOutput: (output) => {
+            // Stream output to terminal
+            io.to(sessionId).emit('terminal-output', {
+              sessionId,
+              output
+            });
+          }
         });
 
-        await executionManager.write(sessionId, `${payload}\n`);
+        // Notify execution complete
+        io.to(sessionId).emit('execution-complete', {
+          sessionId,
+          exitCode: result.exitCode
+        });
 
-        // Let the UI know the request has been queued; the terminal stream remains live for results
-        io.to(sessionId).emit('execution-complete', { sessionId });
-
-        logger.debug('code_execution_queued', { sessionId, language: langKey });
+        logger.debug('code_execution_complete', { sessionId, language: langKey, exitCode: result.exitCode });
 
       } catch (error) {
         logger.error('run-code handler failed', error, { sessionId, language });

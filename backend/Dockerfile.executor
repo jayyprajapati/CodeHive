@@ -1,0 +1,22 @@
+# CodeHive Multi-Language Execution Environment
+# Supports: JavaScript (Node.js), Python 3, Java (OpenJDK)
+
+FROM alpine:3.19
+
+# Install runtimes
+RUN apk add --no-cache \
+    nodejs \
+    npm \
+    python3 \
+    openjdk17-jre-headless \
+    openjdk17-jdk \
+    && adduser -D -u 1000 codeuser
+
+# Set up workspace
+WORKDIR /home/codeuser/workspace
+RUN chown -R codeuser:codeuser /home/codeuser
+
+USER codeuser
+
+# Default shell
+CMD ["/bin/sh"]

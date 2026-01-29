@@ -4,7 +4,7 @@ import { FitAddon } from 'xterm-addon-fit';
 import PropTypes from "prop-types";
 import 'xterm/css/xterm.css';
 
-export default function TerminalUI({ socket, sessionId, isRunning }) {
+export default function TerminalUI({ socket, sessionId }) {
   const terminalRef = useRef(null);
   const termRef = useRef(null);
   const fitAddonRef = useRef(null);
@@ -110,18 +110,12 @@ export default function TerminalUI({ socket, sessionId, isRunning }) {
     };
   }, [socket, sessionId]);
 
-  // Show status when a run is triggered to keep UX parity with prior flow
-  useEffect(() => {
-    if (!termRef.current || !isRunning) return;
-    termRef.current.clear();
-    termRef.current.write('\x1b[32m$ Running code...\x1b[0m\r\n\r\n');
-  }, [isRunning]);
+
 
   return <div ref={terminalRef} style={{ width: '100%' }} className='terminal-ui' />;
 }
 
 TerminalUI.propTypes = {
   socket: PropTypes.object, // Can be null during reconnection
-  sessionId: PropTypes.string.isRequired,
-  isRunning: PropTypes.bool.isRequired
+  sessionId: PropTypes.string.isRequired
 };
