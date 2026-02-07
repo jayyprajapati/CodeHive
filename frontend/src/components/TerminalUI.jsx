@@ -57,10 +57,35 @@ export default function TerminalUI({ socket, sessionId }) {
 
     window.addEventListener('resize', handleWindowResize);
 
-    // Incoming output stream
+    // Incoming output stream with filtering to hide shell commands
+    // Filter patterns for heredoc and execution commands
+    const shellPatterns = [
+      /^cat\s*>\s*\w+\.\w+\s*<</, // cat > file << 'EOF'
+      /^>\s/,                     // heredoc continuation lines
+      /^\$\s*(python|node|java)/, // $ python/node/java commands
+      /^EOF_\d+$/,                // EOF delimiter
+      /^\$\s*\[6n$/,              // ANSI cursor query in prompt
+      /^\$\s*$/,                  // Empty prompt
+    ];
+
+    const isShellNoise = (line) => {
+      const trimmed = line.trim();
+      return shellPatterns.some(pattern => pattern.test(trimmed));
+    };
+
+    const filterOutput = (rawOutput) => {
+      // Split by lines, filter, and rejoin
+      const lines = rawOutput.split(/\r?\n/);
+      const filtered = lines.filter(line => !isShellNoise(line));
+      return filtered.join('\n');
+    };
+
     const outputHandler = (data) => {
       if (!data || data.sessionId !== sessionId) return;
-      term.write(data.output.replace(/\n/g, '\r\n'));
+      const filtered = filterOutput(data.output);
+      if (filtered.trim() || filtered.includes('\n')) {
+        term.write(filtered.replace(/\n/g, '\r\n'));
+      }
     };
 
     const closedHandler = (data) => {
