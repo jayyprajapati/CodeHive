@@ -39,6 +39,8 @@ const SUPPORTED_LANGUAGES = {
 
 const DEFAULT_LANGUAGE = 'javascript';
 const MAX_STDIN_CHARS = 64 * 1024; // Keep stdin bursts bounded
+const TERMINAL_CONTROL_ROLES = new Set(['owner', 'editor']);
+const presenceBySession = new Map();
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -48,6 +50,17 @@ async function getSessionWithMembership(sessionId, socketId) {
   const session = await getSession(sessionId);
   const isMember = session?.users?.some(u => u.socketId === socketId) || false;
   return { session, isMember };
+}
+
+function canControlTerminal(user) {
+  return !!user && TERMINAL_CONTROL_ROLES.has(user.role);
+}
+
+function getPresenceMap(sessionId) {
+  if (!presenceBySession.has(sessionId)) {
+    presenceBySession.set(sessionId, new Map());
+  }
+  return presenceBySession.get(sessionId);
 }
 
 // ============================================================================
@@ -97,6 +110,63 @@ const initSocket = (httpServer) => {
 
     const ensureTerminal = async (sessionId) => {
       await executionManager.ensureSession(sessionId, terminalHooks(sessionId));
+    };
+
+    const getControllerPayload = (user) => {
+      if (!user) return null;
+      return {
+        socketId: user.socketId,
+        userId: user.userId,
+        name: user.name
+      };
+    };
+
+    const setTerminalController = async (sessionId, controllerUser, reason, actorUser) => {
+      const controllerPayload = getControllerPayload(controllerUser);
+
+      await Session.updateOne(
+        { sessionId },
+        { $set: { terminalController: controllerPayload } }
+      );
+
+      logger.room('terminal_control_changed', {
+        sessionId,
+        controller: controllerPayload?.name || null,
+        reason,
+        actor: actorUser?.name || actorUser?.socketId || null
+      });
+
+      io.to(sessionId).emit('terminal-control-changed', {
+        sessionId,
+        controller: controllerPayload,
+        reason
+      });
+    };
+
+    const updatePresence = (sessionId, user, payload = {}) => {
+      const map = getPresenceMap(sessionId);
+      const previous = map.get(user.socketId) || {};
+      const presence = {
+        socketId: user.socketId,
+        userId: user.userId,
+        name: user.name,
+        role: user.role,
+        file: payload.file ?? previous.file ?? null,
+        cursor: payload.cursor ?? previous.cursor ?? null,
+        selection: payload.selection ?? previous.selection ?? null,
+        updatedAt: Date.now()
+      };
+      map.set(user.socketId, presence);
+      return presence;
+    };
+
+    const removePresence = (sessionId, socketId) => {
+      const map = presenceBySession.get(sessionId);
+      if (!map) return;
+      map.delete(socketId);
+      if (map.size === 0) {
+        presenceBySession.delete(sessionId);
+      }
     };
 
     // --------------------------------------------------------------------------
@@ -177,7 +247,18 @@ const initSocket = (httpServer) => {
         socket.emit('session-data', {
           code: updatedSession.code,
           chat: updatedSession.chat,
-          role: updatedSession.users.find(u => u.socketId === socket.id)?.role || 'viewer'
+          role: updatedSession.users.find(u => u.socketId === socket.id)?.role || 'viewer',
+          terminalController: updatedSession.terminalController || null
+        });
+
+        const presence = updatePresence(sessionId, userEntry);
+        socket.emit('presence-state', {
+          sessionId,
+          presence: Array.from(getPresenceMap(sessionId).values())
+        });
+        socket.broadcast.to(sessionId).emit('presence-update', {
+          sessionId,
+          presence
         });
 
         await executionManager.registerClient(sessionId, terminalHooks(sessionId));
@@ -242,6 +323,21 @@ const initSocket = (httpServer) => {
 
         logger.room('role_changed', { sessionId, targetUser, newRole });
 
+        const controllerSocketId = updatedSession.terminalController?.socketId;
+        const controllerUser = updatedSession.users.find(u => u.socketId === controllerSocketId);
+        if (controllerSocketId && controllerUser?.name === targetUser && newRole === 'viewer') {
+          await setTerminalController(sessionId, null, 'controller_role_demoted', requester);
+        }
+
+        const targetSessionUser = updatedSession.users.find(u => u.name === targetUser);
+        if (targetSessionUser) {
+          const presence = updatePresence(sessionId, { ...targetSessionUser, role: newRole });
+          io.to(sessionId).emit('presence-update', {
+            sessionId,
+            presence
+          });
+        }
+
         // Broadcast role update
         io.to(sessionId).emit('role-updated', {
           user: targetUser,
@@ -259,6 +355,107 @@ const initSocket = (httpServer) => {
         socket.emit('error', {
           message: 'Failed to change role',
           code: 'ROLE_CHANGE_ERROR'
+        });
+      }
+    });
+
+    // --------------------------------------------------------------------------
+    // Terminal Control Transfer (Owner Only)
+    // --------------------------------------------------------------------------
+
+    socket.on('terminal-transfer-control', async (data) => {
+      try {
+        const { sessionId, targetUser } = data || {};
+
+        if (!sessionId || !targetUser) return;
+
+        logger.debug('terminal_transfer_requested', { sessionId, targetUser });
+
+        const session = await getSession(sessionId);
+        if (!session) {
+          return socket.emit('error', {
+            message: 'Session not found',
+            code: 'SESSION_NOT_FOUND'
+          });
+        }
+
+        const requester = session.users.find(u => u.socketId === socket.id);
+        if (requester?.role !== 'owner') {
+          logger.warn('terminal_transfer_unauthorized', { sessionId, socketId: socket.id });
+          return socket.emit('error', {
+            message: 'Only the session owner can transfer terminal control',
+            code: 'UNAUTHORIZED'
+          });
+        }
+
+        const target = session.users.find(u => u.name === targetUser || u.userId === targetUser);
+        if (!target) {
+          return socket.emit('error', {
+            message: 'Target user not found in session',
+            code: 'USER_NOT_FOUND'
+          });
+        }
+
+        if (!canControlTerminal(target)) {
+          return socket.emit('error', {
+            message: 'Target user cannot control the terminal',
+            code: 'TERMINAL_CONTROL_FORBIDDEN'
+          });
+        }
+
+        if (session.terminalController?.socketId === target.socketId) {
+          return;
+        }
+
+        await setTerminalController(sessionId, target, 'owner_transfer', requester);
+      } catch (error) {
+        logger.error('terminal-transfer-control handler failed', error, {
+          sessionId: data?.sessionId
+        });
+        socket.emit('error', {
+          message: 'Failed to transfer terminal control',
+          code: 'TERMINAL_TRANSFER_ERROR'
+        });
+      }
+    });
+
+    socket.on('terminal-request-control', async (data) => {
+      try {
+        const { sessionId } = data || {};
+        if (!sessionId) return;
+
+        const { session, isMember } = await getSessionWithMembership(sessionId, socket.id);
+        if (!session || !isMember) {
+          return socket.emit('error', {
+            message: 'You are not part of this session',
+            code: 'NOT_IN_SESSION'
+          });
+        }
+
+        const user = session.users.find(u => u.socketId === socket.id);
+        if (!user || !canControlTerminal(user)) {
+          logger.warn('terminal_request_rejected_role', { sessionId, socketId: socket.id, role: user?.role });
+          return socket.emit('error', {
+            message: 'Your role cannot control the terminal',
+            code: 'TERMINAL_CONTROL_FORBIDDEN'
+          });
+        }
+
+        if (session.terminalController?.socketId) {
+          return socket.emit('error', {
+            message: 'Another user is controlling the terminal',
+            code: 'TERMINAL_CONTROL_BUSY'
+          });
+        }
+
+        await setTerminalController(sessionId, user, 'request_granted', user);
+      } catch (error) {
+        logger.error('terminal-request-control handler failed', error, {
+          sessionId: data?.sessionId
+        });
+        socket.emit('error', {
+          message: 'Failed to request terminal control',
+          code: 'TERMINAL_REQUEST_ERROR'
         });
       }
     });
@@ -294,6 +491,8 @@ const initSocket = (httpServer) => {
         await Session.deleteOne({ sessionId });
 
         await executionManager.shutdown(sessionId, 'owner_ended', true);
+
+        presenceBySession.delete(sessionId);
 
         logger.room('session_destroyed', {
           sessionId,
@@ -346,6 +545,18 @@ const initSocket = (httpServer) => {
           return;
         }
 
+        if (session.terminalController?.socketId === socket.id) {
+          await setTerminalController(sessionId, null, 'controller_left', user);
+        }
+
+        removePresence(sessionId, socket.id);
+        io.to(sessionId).emit('presence-removed', {
+          sessionId,
+          socketId: socket.id,
+          userId: user.userId,
+          name: user.name
+        });
+
         // Remove user from database
         await removeUserFromSession(sessionId, socket.id);
 
@@ -374,6 +585,7 @@ const initSocket = (httpServer) => {
           await Session.deleteOne({ sessionId });
           await executionManager.shutdown(sessionId, 'room_empty');
           logger.room('session_destroyed', { sessionId, reason: 'empty' });
+          presenceBySession.delete(sessionId);
         }
 
       } catch (error) {
@@ -393,11 +605,32 @@ const initSocket = (httpServer) => {
      */
     socket.on('code-change', async (data) => {
       try {
+        const { sessionId, code } = data || {};
+
+        if (!sessionId) return;
+
+        const { session, isMember } = await getSessionWithMembership(sessionId, socket.id);
+        if (!session || !isMember) {
+          return socket.emit('error', {
+            message: 'You are not part of this session',
+            code: 'NOT_IN_SESSION'
+          });
+        }
+
+        const user = session.users.find(u => u.socketId === socket.id);
+        if (!user || user.role === 'viewer') {
+          logger.warn('code_change_rejected_role', { sessionId, socketId: socket.id, role: user?.role });
+          return socket.emit('error', {
+            message: 'Viewers cannot edit code',
+            code: 'PERMISSION_DENIED'
+          });
+        }
+
         await Session.findOneAndUpdate(
-          { sessionId: data.sessionId },
-          { $set: { code: data.code } }
+          { sessionId },
+          { $set: { code } }
         );
-        socket.broadcast.to(data.sessionId).emit('code-update', data.code);
+        socket.broadcast.to(sessionId).emit('code-update', code);
 
       } catch (error) {
         logger.error('code-change handler failed', error, {
@@ -463,6 +696,34 @@ const initSocket = (httpServer) => {
     });
 
     // --------------------------------------------------------------------------
+    // Presence (non-persistent)
+    // --------------------------------------------------------------------------
+
+    socket.on('presence-update', async (data = {}) => {
+      try {
+        const { sessionId, cursor, selection, file } = data;
+        if (!sessionId) return;
+
+        const { session, isMember } = await getSessionWithMembership(sessionId, socket.id);
+        if (!session || !isMember) return;
+
+        const user = session.users.find(u => u.socketId === socket.id);
+        if (!user) return;
+
+        const presence = updatePresence(sessionId, user, { cursor, selection, file });
+        io.to(sessionId).emit('presence-update', {
+          sessionId,
+          presence
+        });
+      } catch (error) {
+        logger.warn('presence-update handler failed', {
+          sessionId: data?.sessionId,
+          error: error.message
+        });
+      }
+    });
+
+    // --------------------------------------------------------------------------
     // Interactive Terminal
     // --------------------------------------------------------------------------
 
@@ -485,6 +746,43 @@ const initSocket = (httpServer) => {
             message: 'You are not part of this session',
             code: 'NOT_IN_SESSION'
           });
+        }
+
+        const user = session.users.find(u => u.socketId === socket.id);
+        if (!user) {
+          return socket.emit('error', {
+            message: 'You are not part of this session',
+            code: 'NOT_IN_SESSION'
+          });
+        }
+
+        if (!canControlTerminal(user)) {
+          logger.warn('terminal_input_rejected_role', {
+            sessionId,
+            socketId: socket.id,
+            role: user.role
+          });
+          return socket.emit('error', {
+            message: 'Your role cannot control the terminal',
+            code: 'TERMINAL_CONTROL_FORBIDDEN'
+          });
+        }
+
+        const controllerSocketId = session.terminalController?.socketId;
+        if (controllerSocketId && controllerSocketId !== socket.id) {
+          logger.warn('terminal_input_rejected_controller', {
+            sessionId,
+            socketId: socket.id,
+            controllerSocketId
+          });
+          return socket.emit('error', {
+            message: 'Another user is controlling the terminal',
+            code: 'TERMINAL_CONTROL_REQUIRED'
+          });
+        }
+
+        if (!controllerSocketId) {
+          await setTerminalController(sessionId, user, 'input_acquired', user);
         }
 
         await ensureTerminal(sessionId);
@@ -570,6 +868,15 @@ const initSocket = (httpServer) => {
           });
         }
 
+        const user = session.users.find(u => u.socketId === socket.id);
+        if (!user || user.role === 'viewer') {
+          logger.warn('run_code_rejected_role', { sessionId, socketId: socket.id, role: user?.role });
+          return socket.emit('error', {
+            message: 'Viewers cannot run code',
+            code: 'PERMISSION_DENIED'
+          });
+        }
+
         const langKey = SUPPORTED_LANGUAGES[language] ? language : DEFAULT_LANGUAGE;
         const langConfig = SUPPORTED_LANGUAGES[langKey];
 
@@ -641,6 +948,18 @@ const initSocket = (httpServer) => {
           const user = session.users.find(u => u.socketId === socket.id);
 
           if (user) {
+            if (session.terminalController?.socketId === socket.id) {
+              await setTerminalController(session.sessionId, null, 'controller_disconnected', user);
+            }
+
+            removePresence(session.sessionId, socket.id);
+            io.to(session.sessionId).emit('presence-removed', {
+              sessionId: session.sessionId,
+              socketId: socket.id,
+              userId: user.userId,
+              name: user.name
+            });
+
             // Remove user from session
             await Session.updateOne(
               { sessionId: session.sessionId },
@@ -673,6 +992,7 @@ const initSocket = (httpServer) => {
                 sessionId: session.sessionId,
                 reason: 'empty_after_disconnect'
               });
+              presenceBySession.delete(session.sessionId);
             }
           }
         }

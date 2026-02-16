@@ -1,4 +1,4 @@
-const { Session } = require('../Models/Session');
+const { Session } = require('../models/Session');
 const crypto = require('crypto');
 // const NodeCache = require('node-cache');
 
@@ -13,6 +13,7 @@ async function createSession(sessionId, password, owner) {
       chat: [],
       password: hashedPassword,
       owner,
+      terminalController: null,
       active: true,
       createdAt: new Date()
     });

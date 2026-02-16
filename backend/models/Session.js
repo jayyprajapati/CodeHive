@@ -19,11 +19,16 @@ const sessionSchema = new mongoose.Schema({
     }],
     password: String,
     owner: String,
+    terminalController: {
+      socketId: String,
+      userId: String,
+      name: String
+    },
     createdAt: Date,
     active: Boolean
   });
   
-  const Session = mongoose.model('Session', sessionSchema);
+  const Session = mongoose.model('codehive_Session', sessionSchema);
 
     Session.collection.createIndex({ sessionId: 1 }, { unique: true });
     Session.collection.createIndex({ "users.socketId": 1 });

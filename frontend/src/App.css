@@ -1103,6 +1103,11 @@
   background: #24964c;
 }
 
+.run-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .locked-line {
   background-color: rgba(255, 255, 255, 0.1);
   pointer-events: none;
@@ -1430,9 +1435,157 @@
   padding-inline: 10px;
 }
 
+.presence-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+  font-size: 0.75rem;
+}
+
+.presence-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.presence-file {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.presence-cursor {
+  border-left: 2px solid var(--presence-color);
+}
+
+.presence-selection {
+  background: rgba(74, 144, 226, 0.18);
+}
+
+.presence-label {
+  background: var(--presence-color);
+  color: #ffffff;
+  border-radius: 6px;
+  padding: 0 6px;
+  margin-left: 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.presence-color-0 { --presence-color: #4a90e2; }
+.presence-color-1 { --presence-color: #f5a623; }
+.presence-color-2 { --presence-color: #7ed321; }
+.presence-color-3 { --presence-color: #d0021b; }
+.presence-color-4 { --presence-color: #9013fe; }
+.presence-color-5 { --presence-color: #50e3c2; }
+
+.presence-selection.presence-color-0 { background: rgba(74, 144, 226, 0.2); }
+.presence-selection.presence-color-1 { background: rgba(245, 166, 35, 0.2); }
+.presence-selection.presence-color-2 { background: rgba(126, 211, 33, 0.2); }
+.presence-selection.presence-color-3 { background: rgba(208, 2, 27, 0.2); }
+.presence-selection.presence-color-4 { background: rgba(144, 19, 254, 0.2); }
+.presence-selection.presence-color-5 { background: rgba(80, 227, 194, 0.2); }
+
 .terminal-ui {
   border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 12px;
+}
+
+.terminal-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+}
+
+.terminal-control-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+}
+
+.terminal-control-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.terminal-control-label {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.terminal-control-name {
+  font-weight: 600;
+}
+
+.terminal-control-name.is-controller {
+  color: #4CAF50;
+}
+
+.terminal-control-note {
+  color: #ff9800;
+  font-weight: 600;
+}
+
+.terminal-control-transfer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.terminal-control-select {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: var(--text-primary);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 0.8rem;
+}
+
+.terminal-control-button {
+  background: rgba(74, 144, 226, 0.2);
+  border: 1px solid rgba(74, 144, 226, 0.4);
+  color: #ffffff;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.terminal-control-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.terminal-control-alert {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 152, 0, 0.4);
+  background: rgba(255, 152, 0, 0.1);
+  color: #ffb74d;
+  font-size: 0.8rem;
+}
+
+.terminal-ui {
+  flex: 1;
+  min-height: 0;
 }
 
 .editor-footer {
@@ -1446,6 +1599,16 @@
 .editor-title {
   display: flex;
   align-items: center;
+}
+
+.permission-notice {
+  margin-top: 4px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(244, 67, 54, 0.4);
+  background: rgba(244, 67, 54, 0.12);
+  color: #ff8a80;
+  font-size: 0.8rem;
 }
 
 
@@ -1492,6 +1655,11 @@ button.lang-select:visited {
 }
 button.lang-select:hover,.lang-select-option:hover {
   background-color:#595959
+}
+
+.lang-select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .lang-select-wrapper {

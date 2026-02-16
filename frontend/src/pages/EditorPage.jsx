@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useNavigate, useLocation, useParams } from "react-router-dom";
 import Editor from "@monaco-editor/react";
 import Split from "react-split";
@@ -45,7 +45,11 @@ export default function EditorPage() {
 
   const { currentUser } = useAuth();
   const editorRef = useRef(null);
+  const monacoRef = useRef(null);
   const debounceTimeoutRef = useRef(null);
+  const presenceThrottleRef = useRef({ lastSent: 0, timer: null, pending: null });
+  const presenceDecorationIdsRef = useRef([]);
+  const editorDisposableRef = useRef([]);
 
   const [sessionState, setSessionState] = useState({
     code: "",
@@ -53,7 +57,10 @@ export default function EditorPage() {
     users: [],
     userRole: "editor",
     chatMessages: [],
+    terminalController: null,
   });
+
+  const [presenceState, setPresenceState] = useState({});
 
   const [uiState, setUiState] = useState({
     copiedSessionId: false,
@@ -67,21 +74,75 @@ export default function EditorPage() {
     isSessionEnding: false,
   });
 
-  const { code, language, users, userRole, chatMessages } = sessionState;
+  const [permissionNotice, setPermissionNotice] = useState('');
+
+  const { code, language, users, userRole, chatMessages, terminalController } = sessionState;
   const { isCodeRunning, isSessionEnding } = loading;
   const sessionPassword = location.state?.sessionPassword;
+
+  const getFileName = useCallback((lang) => {
+    if (lang === "python") return "Code.py";
+    if (lang === "java") return "Code.java";
+    return "Code.js";
+  }, []);
+
+  const fileName = getFileName(language);
+
+  const getPresenceColorIndex = useCallback((id) => {
+    if (!id) return 0;
+    let hash = 0;
+    for (let i = 0; i < id.length; i += 1) {
+      hash = (hash << 5) - hash + id.charCodeAt(i);
+      hash |= 0;
+    }
+    return Math.abs(hash) % 6;
+  }, []);
+
+  const queuePresenceUpdate = useCallback((payload) => {
+    if (!socket?.connected) return;
+    const throttle = presenceThrottleRef.current;
+    throttle.pending = { ...throttle.pending, ...payload };
+    const now = Date.now();
+    const delay = 80;
+
+    if (now - throttle.lastSent >= delay) {
+      const toSend = throttle.pending;
+      throttle.pending = null;
+      throttle.lastSent = now;
+      socket.emit("presence-update", { sessionId, ...toSend });
+      return;
+    }
+
+    if (!throttle.timer) {
+      throttle.timer = setTimeout(() => {
+        throttle.timer = null;
+        if (!throttle.pending) return;
+        const toSend = throttle.pending;
+        throttle.pending = null;
+        throttle.lastSent = Date.now();
+        socket.emit("presence-update", { sessionId, ...toSend });
+      }, delay - (now - throttle.lastSent));
+    }
+  }, [socket, sessionId]);
 
   // Socket event handlers
   useEffect(() => {
     if (!isConnected || !socket || !currentUser) return;
 
-    const handleSessionData = ({ code: initialCode, chat, role, language: initialLanguage }) => {
+    const handleSessionData = ({
+      code: initialCode,
+      chat,
+      role,
+      language: initialLanguage,
+      terminalController: controller
+    }) => {
       setSessionState((prev) => ({
         ...prev,
         code: initialCode || LANGUAGE_TEMPLATES[initialLanguage || prev.language],
         userRole: role,
         chatMessages: chat || [],
         language: initialLanguage || prev.language,
+        terminalController: controller || null,
       }));
     };
 
@@ -129,6 +190,44 @@ export default function EditorPage() {
 
     const handleSessionEnded = () => navigate("/dashboard");
     const handleExecutionComplete = () => setLoading((prev) => ({ ...prev, isCodeRunning: false }));
+    const handleTerminalControlChanged = ({ controller }) => {
+      setSessionState((prev) => ({
+        ...prev,
+        terminalController: controller || null,
+      }));
+    };
+
+    const handlePresenceState = ({ presence }) => {
+      const map = {};
+      (presence || []).forEach((item) => {
+        if (item?.socketId) {
+          map[item.socketId] = item;
+        }
+      });
+      setPresenceState(map);
+    };
+
+    const handlePresenceUpdate = ({ presence }) => {
+      if (!presence?.socketId) return;
+      setPresenceState((prev) => ({
+        ...prev,
+        [presence.socketId]: presence,
+      }));
+    };
+
+    const handlePresenceRemoved = ({ socketId }) => {
+      if (!socketId) return;
+      setPresenceState((prev) => {
+        const next = { ...prev };
+        delete next[socketId];
+        return next;
+      });
+    };
+
+    const handleSocketError = (payload) => {
+      if (!payload || payload.code !== 'PERMISSION_DENIED') return;
+      setPermissionNotice(payload.message || 'Action not allowed for your role.');
+    };
 
     socket.emit("join-session", {
       sessionId,
@@ -146,6 +245,11 @@ export default function EditorPage() {
     socket.on("chat-message", handleChatMessage);
     socket.on("session-ended", handleSessionEnded);
     socket.on("execution-complete", handleExecutionComplete);
+    socket.on("terminal-control-changed", handleTerminalControlChanged);
+    socket.on("presence-state", handlePresenceState);
+    socket.on("presence-update", handlePresenceUpdate);
+    socket.on("presence-removed", handlePresenceRemoved);
+    socket.on("error", handleSocketError);
 
     return () => {
       socket.off("session-data", handleSessionData);
@@ -157,8 +261,32 @@ export default function EditorPage() {
       socket.off("chat-message", handleChatMessage);
       socket.off("session-ended", handleSessionEnded);
       socket.off("execution-complete", handleExecutionComplete);
+      socket.off("terminal-control-changed", handleTerminalControlChanged);
+      socket.off("presence-state", handlePresenceState);
+      socket.off("presence-update", handlePresenceUpdate);
+      socket.off("presence-removed", handlePresenceRemoved);
+      socket.off("error", handleSocketError);
     };
   }, [isConnected, socket, sessionId, currentUser, sessionPassword, navigate]);
+
+  useEffect(() => {
+    if (!socket?.connected) return;
+    queuePresenceUpdate({ file: fileName });
+  }, [socket, queuePresenceUpdate, fileName]);
+
+  useEffect(() => {
+    return () => {
+      if (presenceThrottleRef.current.timer) {
+        clearTimeout(presenceThrottleRef.current.timer);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!permissionNotice) return;
+    const timer = setTimeout(() => setPermissionNotice(''), 3000);
+    return () => clearTimeout(timer);
+  }, [permissionNotice]);
 
   const handleEditorChange = useCallback(
     (value) => {
@@ -176,6 +304,10 @@ export default function EditorPage() {
   );
 
   const handleLanguageChange = (newLang) => {
+    if (userRole === "viewer") {
+      setPermissionNotice("Viewers cannot change language");
+      return;
+    }
     if (
       code !== LANGUAGE_TEMPLATES[language] &&
       code !== "" &&
@@ -191,6 +323,10 @@ export default function EditorPage() {
   };
 
   const handleRunCode = () => {
+    if (userRole === "viewer") {
+      setPermissionNotice("Viewers cannot run code");
+      return;
+    }
     setLoading((prev) => ({ ...prev, isCodeRunning: true }));
     socket.emit("run-code", { sessionId, code, language });
   };
@@ -220,6 +356,82 @@ export default function EditorPage() {
     scrollBeyondLastLine: false,
     automaticLayout: true,
   };
+
+  useEffect(() => {
+    if (!editorRef.current || !monacoRef.current || !currentUser) return;
+
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    const decorations = [];
+
+    Object.values(presenceState).forEach((presence) => {
+      if (!presence?.socketId || !presence?.name) return;
+      if (presence.userId === currentUser.uid || presence.name === currentUser.displayName) return;
+
+      const colorIndex = getPresenceColorIndex(presence.socketId);
+      const cursor = presence.cursor;
+      const selection = presence.selection;
+
+      if (selection && selection.startLineNumber && selection.endLineNumber) {
+        const selectionRange = new monaco.Range(
+          selection.startLineNumber,
+          selection.startColumn,
+          selection.endLineNumber,
+          selection.endColumn
+        );
+        decorations.push({
+          range: selectionRange,
+          options: {
+            className: `presence-selection presence-color-${colorIndex}`,
+            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
+          }
+        });
+      }
+
+      if (cursor && cursor.lineNumber && cursor.column) {
+        const cursorRange = new monaco.Range(
+          cursor.lineNumber,
+          cursor.column,
+          cursor.lineNumber,
+          cursor.column + 1
+        );
+        decorations.push({
+          range: cursorRange,
+          options: {
+            className: `presence-cursor presence-color-${colorIndex}`,
+            hoverMessage: { value: presence.name },
+            after: {
+              content: ` ${presence.name} `,
+              inlineClassName: `presence-label presence-color-${colorIndex}`
+            },
+            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
+          }
+        });
+      }
+    });
+
+    presenceDecorationIdsRef.current = editor.deltaDecorations(
+      presenceDecorationIdsRef.current,
+      decorations
+    );
+  }, [presenceState, currentUser, getPresenceColorIndex]);
+
+  const presenceList = useMemo(() => {
+    const list = Object.values(presenceState);
+    const hasSelf = list.some((item) => item.userId === currentUser?.uid || item.name === currentUser?.displayName);
+
+    if (!hasSelf && currentUser) {
+      list.push({
+        socketId: "local",
+        userId: currentUser.uid,
+        name: currentUser.displayName,
+        role: userRole,
+        file: fileName
+      });
+    }
+
+    return list.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  }, [presenceState, currentUser, userRole, fileName]);
 
   // Show loader during initial connection, if user not authenticated, or if socket not yet available
   // This ensures TerminalUI and Chat components receive a valid socket prop
@@ -340,6 +552,7 @@ export default function EditorPage() {
                         isLangSelectDropdownOpen: !prev.isLangSelectDropdownOpen,
                       }))
                     }
+                    disabled={userRole === "viewer"}
                   >
                     {toTitleCase(language)} ↓
                   </button>
@@ -366,20 +579,82 @@ export default function EditorPage() {
                 <button
                   className="run-button"
                   onClick={handleRunCode}
-                  disabled={isCodeRunning}
+                  disabled={isCodeRunning || userRole === "viewer"}
                 >
                   {isCodeRunning ? "Running..." : "Run"}
                 </button>
               </div>
             </div>
+            {permissionNotice && (
+              <div className="permission-notice" role="status" aria-live="polite">
+                {permissionNotice}
+              </div>
+            )}
+            <div className="presence-strip">
+              {presenceList.map((presence) => {
+                const presenceFile = presence.file || "Unknown";
+                const colorIndex = getPresenceColorIndex(presence.socketId || presence.userId || presence.name);
+                return (
+                  <span
+                    key={presence.socketId || presence.userId || presence.name}
+                    className={`presence-pill presence-color-${colorIndex}`}
+                  >
+                    {presence.name}
+                    <span className="presence-file">({presenceFile})</span>
+                  </span>
+                );
+              })}
+            </div>
             <Editor
               width="100%"
-              height="calc(100% - 40px)"
+              height="calc(100% - 66px)"
               language={language}
               value={code}
               onChange={handleEditorChange}
               theme="vs-dark"
-              onMount={(editor) => (editorRef.current = editor)}
+              onMount={(editor, monaco) => {
+                editorRef.current = editor;
+                monacoRef.current = monaco;
+
+                editorDisposableRef.current.forEach((disposable) => disposable.dispose());
+                editorDisposableRef.current = [];
+
+                editorDisposableRef.current.push(
+                  editor.onDidChangeCursorPosition((event) => {
+                    queuePresenceUpdate({
+                      cursor: {
+                        lineNumber: event.position.lineNumber,
+                        column: event.position.column
+                      }
+                    });
+                  })
+                );
+
+                editorDisposableRef.current.push(
+                  editor.onDidChangeCursorSelection((event) => {
+                    const selection = event.selection;
+                    if (!selection) return;
+                    if (selection.isEmpty()) {
+                      queuePresenceUpdate({ selection: null });
+                      return;
+                    }
+                    const start = selection.getStartPosition
+                      ? selection.getStartPosition()
+                      : { lineNumber: selection.startLineNumber, column: selection.startColumn };
+                    const end = selection.getEndPosition
+                      ? selection.getEndPosition()
+                      : { lineNumber: selection.endLineNumber, column: selection.endColumn };
+                    queuePresenceUpdate({
+                      selection: {
+                        startLineNumber: start.lineNumber,
+                        startColumn: start.column,
+                        endLineNumber: end.lineNumber,
+                        endColumn: end.column
+                      }
+                    });
+                  })
+                );
+              }}
               options={editorOptions}
             />
           </div>
@@ -396,6 +671,10 @@ export default function EditorPage() {
             <TerminalUI
               socket={socket}
               sessionId={sessionId}
+              currentUser={currentUser}
+              userRole={userRole}
+              users={users}
+              terminalController={terminalController}
             />
             <Chat
               socket={socket}
