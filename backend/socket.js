@@ -16,7 +16,7 @@
  */
 
 const { Server } = require('socket.io');
-const { Session } = require('./Models/Session');
+const { Session } = require('./models/Session');
 const {
   verifySession,
   sessionExists,
@@ -76,7 +76,7 @@ function getPresenceMap(sessionId) {
 const initSocket = (httpServer) => {
   const io = new Server(httpServer, {
     cors: {
-      origin: "https://*.jayprajapati.me",
+      origin: "https://*.jayprajapati.dev",
       methods: ["GET", "POST"],
       allowedHeaders: ["Authorization"],
       credentials: true
