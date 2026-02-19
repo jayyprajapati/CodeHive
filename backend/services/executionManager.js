@@ -118,8 +118,25 @@ class ExecutionManager {
 
     // Since TTY is enabled, stdout and stderr are multiplexed into a single stream
     // No demuxing needed - just read directly from the attach stream
+    //
+    // NOTE: container.attach({ hijack: true }) leaks the attach options JSON
+    // (e.g. {"stream":true,"stdin":true,...}) both as the first data frame
+    // AND as shell echo in subsequent frames. We filter all occurrences.
+    const ATTACH_JSON_RE = /\{"stream":true[^}]*\}/g;
+
     attachStream.on('data', (chunk) => {
-      const data = chunk.toString('utf8');
+      let data = chunk.toString('utf8');
+
+      // Strip the attach options JSON from output
+      if (data.includes('"stream":true')) {
+        data = data.replace(ATTACH_JSON_RE, '');
+        // If nothing meaningful remains after stripping, skip entirely
+        if (!data.replace(/[\r\n\s$\u001b\[J]/g, '').trim()) {
+          logger.debug('execution_skipped_attach_noise', { sessionId });
+          return;
+        }
+      }
+
       logger.debug('execution_output', { sessionId, length: data.length, sample: data.slice(0, 100) });
       emitter.emit('data', data);
       // Broadcast to all registered output hooks
@@ -253,107 +270,8 @@ class ExecutionManager {
     this.resetIdleTimer(sessionId);
   }
 
-  /**
-   * Run code in a temporary container with the appropriate language runtime.
-   * Creates a new container for each execution, supporting multi-language switching.
-   * 
-   * @param {Object} options
-   * @param {string} options.image - Docker image to use (e.g., 'python:3.12-alpine')
-   * @param {string} options.code - Code content to execute
-   * @param {string} options.filename - Filename to write (e.g., 'main.py')
-   * @param {string} options.runCmd - Command to run (e.g., 'python main.py')
-   * @param {Function} options.onOutput - Callback for output chunks
-   * @returns {Promise<{exitCode: number}>}
-   */
-  async runInTempContainer({ image, code, filename, runCmd, onOutput }) {
-    // Ensure image is available
-    try {
-      await this.docker.getImage(image).inspect();
-    } catch (err) {
-      logger.debug('pulling_image_for_execution', { image });
-      if (onOutput) onOutput(`Pulling ${image}...\n`);
-      await new Promise((resolve, reject) => {
-        this.docker.pull(image, (pullErr, pullStream) => {
-          if (pullErr) return reject(pullErr);
-          this.docker.modem.followProgress(pullStream, (progressErr) => {
-            if (progressErr) return reject(progressErr);
-            resolve();
-          });
-        });
-      });
-    }
 
-    // Create a shell script that writes the code and runs it
-    const scriptContent = `
-cat > /tmp/workspace/${filename} << 'CODEEOF'
-${code}
-CODEEOF
-cd /tmp/workspace && ${runCmd}
-`;
 
-    logger.debug('temp_container_creating', { image, filename, runCmd });
-
-    // Create temp container
-    const container = await this.docker.createContainer({
-      Image: image,
-      Cmd: ['/bin/sh', '-c', scriptContent],
-      Tty: false,
-      OpenStdin: false,
-      AttachStdout: true,
-      AttachStderr: true,
-      HostConfig: {
-        AutoRemove: true,
-        NetworkMode: 'none',
-        Memory: 256 * 1024 * 1024, // 256 MB
-        NanoCpus: 500_000_000, // 0.5 CPU
-        PidsLimit: 32,
-        Tmpfs: {
-          '/tmp/workspace': 'rw,exec,size=67108864' // 64 MB
-        }
-      }
-    });
-
-    // Attach to get output
-    const stream = await container.attach({
-      stream: true,
-      stdout: true,
-      stderr: true
-    });
-
-    return new Promise(async (resolve, reject) => {
-      // Demux stdout/stderr
-      container.modem.demuxStream(stream, {
-        write: (chunk) => {
-          const text = chunk.toString('utf8');
-          if (onOutput) onOutput(text);
-        }
-      }, {
-        write: (chunk) => {
-          const text = chunk.toString('utf8');
-          if (onOutput) onOutput(text);
-        }
-      });
-
-      // Start container
-      try {
-        await container.start();
-      } catch (startErr) {
-        logger.error('temp_container_start_failed', startErr);
-        reject(startErr);
-        return;
-      }
-
-      // Wait for completion
-      try {
-        const result = await container.wait();
-        logger.debug('temp_container_finished', { exitCode: result.StatusCode });
-        resolve({ exitCode: result.StatusCode });
-      } catch (waitErr) {
-        logger.error('temp_container_wait_failed', waitErr);
-        resolve({ exitCode: -1 });
-      }
-    });
-  }
 
   async resize(sessionId, cols, rows) {
     const session = this.sessions.get(sessionId);

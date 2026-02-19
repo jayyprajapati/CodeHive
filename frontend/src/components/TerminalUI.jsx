@@ -17,7 +17,8 @@ export default function TerminalUI({
   currentUser,
   userRole,
   users,
-  terminalController
+  terminalController,
+  sessionType = 'collaborative'
 }) {
   const terminalRef = useRef(null);
   const termRef = useRef(null);
@@ -30,17 +31,20 @@ export default function TerminalUI({
   const [controlNotice, setControlNotice] = useState('');
   const [transferTarget, setTransferTarget] = useState('');
 
-  const controllerName = terminalController?.name || 'Unclaimed';
-  const canControl = userRole === 'owner' || userRole === 'editor';
-  const isController = terminalController?.userId
+  const isPlayground = sessionType === 'playground';
+
+  // --- Derived state: playground always has full control ---
+  const controllerName = isPlayground ? 'You' : (terminalController?.name || 'Unclaimed');
+  const canControl = isPlayground || userRole === 'owner' || userRole === 'editor';
+  const isController = isPlayground || (terminalController?.userId
     ? terminalController.userId === currentUser?.uid
-    : terminalController?.name === currentUser?.displayName;
-  const isInputEnabled = canControl && (!terminalController || isController);
-  const isOwner = userRole === 'owner';
+    : terminalController?.name === currentUser?.displayName);
+  const isInputEnabled = isPlayground || (canControl && (!terminalController || isController));
+  const isOwner = isPlayground || userRole === 'owner';
 
   const eligibleUsers = useMemo(
-    () => users.filter((user) => user.role !== 'viewer'),
-    [users]
+    () => (isPlayground ? [] : users.filter((user) => user.role !== 'viewer')),
+    [users, isPlayground]
   );
 
   useEffect(() => {
@@ -81,7 +85,6 @@ export default function TerminalUI({
           socket.emit('terminal-resize', { sessionId, cols, rows });
         }
       } catch (_) {
-        /* ignore */
         console.warn('Terminal resize failed: ' + _);
       }
     };
@@ -96,14 +99,16 @@ export default function TerminalUI({
     window.addEventListener('resize', handleWindowResize);
 
     // Incoming output stream with filtering to hide shell commands
-    // Filter patterns for heredoc and execution commands
     const shellPatterns = [
-      /^cat\s*>\s*\w+\.\w+\s*<</, // cat > file << 'EOF'
-      /^>\s/,                     // heredoc continuation lines
-      /^\$\s*(python|node|java)/, // $ python/node/java commands
-      /^EOF_\d+$/,                // EOF delimiter
-      /^\$\s*\[6n$/,              // ANSI cursor query in prompt
-      /^\$\s*$/,                  // Empty prompt
+      /^cat\s*>\s*\w+\.\w+\s*<</,   // cat > file << 'EOF'
+      /^\$\s*cat\s*>\s*\w+\.\w+/,   // $ cat > file (prompted)
+      /^>\s/,                        // heredoc continuation lines
+      /^\$\s*(python|node|java)/,    // $ python/node/java commands
+      /^EOF_\d+$/,                   // EOF delimiter
+      /^\$\s*\[6n$/,                 // ANSI cursor query in prompt
+      /__EXEC_DONE_\d+__/,           // execution sentinel marker
+      /^\{"stream":true/,            // Docker attach header leak
+      /^\$\s*;?\s*echo\s+"__EXEC/,   // echo sentinel command
     ];
 
     const isShellNoise = (line) => {
@@ -112,7 +117,6 @@ export default function TerminalUI({
     };
 
     const filterOutput = (rawOutput) => {
-      // Split by lines, filter, and rejoin
       const lines = rawOutput.split(/\r?\n/);
       const filtered = lines.filter(line => !isShellNoise(line));
       return filtered.join('\n');
@@ -140,14 +144,15 @@ export default function TerminalUI({
         term.writeln('\r\n[server] Disconnected. Input not sent.');
         return;
       }
-      if (!inputEnabledRef.current) {
+      // Playground: always allow input
+      if (!isPlayground && !inputEnabledRef.current) {
         term.writeln(`\r\n[server] Input locked. Controller: ${controllerNameRef.current}.`);
         return;
       }
       socket.emit('terminal-input', { sessionId, input: chunk });
     });
 
-    // Handle socket connect/disconnect for user visibility
+    // Handle socket connect/disconnect
     const handleConnect = () => {
       term.writeln('\r\n[server] Connected to terminal.');
       emitResize();
@@ -169,7 +174,7 @@ export default function TerminalUI({
 
     socket.on('error', handleSocketError);
 
-    // Cleanup on unmount or socket/session change
+    // Cleanup
     return () => {
       socket.off('terminal-output', outputHandler);
       socket.off('terminal-closed', closedHandler);
@@ -185,10 +190,11 @@ export default function TerminalUI({
       termRef.current = null;
       fitAddonRef.current = null;
     };
-  }, [socket, sessionId]);
+  }, [socket, sessionId, isPlayground]);
 
+  // Control state messaging (collaborative only)
   useEffect(() => {
-    if (!termRef.current) return;
+    if (isPlayground || !termRef.current) return;
 
     termRef.current.setOption('disableStdin', !isInputEnabled);
 
@@ -201,7 +207,7 @@ export default function TerminalUI({
         termRef.current.writeln(`\r\n[server] Input enabled.`);
       }
     }
-  }, [isInputEnabled, controllerName]);
+  }, [isInputEnabled, controllerName, isPlayground]);
 
   useEffect(() => {
     if (!controlNotice) return;
@@ -225,50 +231,53 @@ export default function TerminalUI({
 
   return (
     <div className="terminal-panel">
-      <div className="terminal-control-bar">
-        <div className="terminal-control-status">
-          <span className="terminal-control-label">Controller:</span>
-          <span className={`terminal-control-name ${isController ? 'is-controller' : ''}`}>
-            {controllerName}
-          </span>
-          {!isInputEnabled && (
-            <span className="terminal-control-note">Input disabled</span>
+      {/* Collaborative only: control bar */}
+      {!isPlayground && (
+        <div className="terminal-control-bar">
+          <div className="terminal-control-status">
+            <span className="terminal-control-label">Controller:</span>
+            <span className={`terminal-control-name ${isController ? 'is-controller' : ''}`}>
+              {controllerName}
+            </span>
+            {!isInputEnabled && (
+              <span className="terminal-control-note">Input disabled</span>
+            )}
+          </div>
+          {isOwner && eligibleUsers.length > 0 && (
+            <div className="terminal-control-transfer">
+              <select
+                className="terminal-control-select"
+                value={transferTarget}
+                onChange={(event) => setTransferTarget(event.target.value)}
+              >
+                <option value="">Transfer control...</option>
+                {eligibleUsers.map((user) => (
+                  <option key={user.name} value={user.name}>
+                    {user.name} ({user.role})
+                  </option>
+                ))}
+              </select>
+              <button
+                className="terminal-control-button"
+                onClick={handleTransfer}
+                disabled={!transferTarget}
+              >
+                Transfer
+              </button>
+            </div>
           )}
-        </div>
-        {isOwner && eligibleUsers.length > 0 && (
-          <div className="terminal-control-transfer">
-            <select
-              className="terminal-control-select"
-              value={transferTarget}
-              onChange={(event) => setTransferTarget(event.target.value)}
-            >
-              <option value="">Transfer control...</option>
-              {eligibleUsers.map((user) => (
-                <option key={user.name} value={user.name}>
-                  {user.name} ({user.role})
-                </option>
-              ))}
-            </select>
+          {!isOwner && canControl && !isController && (
             <button
               className="terminal-control-button"
-              onClick={handleTransfer}
-              disabled={!transferTarget}
+              onClick={handleRequestControl}
+              disabled={!!terminalController}
             >
-              Transfer
+              Request control
             </button>
-          </div>
-        )}
-        {!isOwner && canControl && !isController && (
-          <button
-            className="terminal-control-button"
-            onClick={handleRequestControl}
-            disabled={!!terminalController}
-          >
-            Request control
-          </button>
-        )}
-      </div>
-      {controlNotice && (
+          )}
+        </div>
+      )}
+      {!isPlayground && controlNotice && (
         <div className="terminal-control-alert" role="status" aria-live="polite">
           {controlNotice}
         </div>
@@ -279,19 +288,26 @@ export default function TerminalUI({
 }
 
 TerminalUI.propTypes = {
-  socket: PropTypes.object, // Can be null during reconnection
-  sessionId: PropTypes.string.isRequired,
+  socket: PropTypes.object,
+  sessionId: PropTypes.string,
   currentUser: PropTypes.object,
-  userRole: PropTypes.string.isRequired,
+  userRole: PropTypes.string,
   users: PropTypes.arrayOf(
     PropTypes.shape({
       name: PropTypes.string.isRequired,
       role: PropTypes.string.isRequired
     })
-  ).isRequired,
+  ),
   terminalController: PropTypes.shape({
     name: PropTypes.string,
     userId: PropTypes.string,
     socketId: PropTypes.string
-  })
+  }),
+  sessionType: PropTypes.oneOf(['playground', 'collaborative'])
+};
+
+TerminalUI.defaultProps = {
+  sessionType: 'collaborative',
+  users: [],
+  userRole: 'editor'
 };

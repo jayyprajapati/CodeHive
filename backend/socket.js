@@ -1,16 +1,12 @@
 /**
- * WebSocket Server - Real-time Collaboration Handler
+ * WebSocket Server - Real-time Collaboration + Playground Handler
  * 
  * Manages Socket.IO connections for the collaborative coding platform.
- * Handles room lifecycle, code synchronization, chat, and code execution.
+ * Supports two session types:
+ *   - "playground"     → ephemeral, in-memory, single user, no DB
+ *   - "collaborative"  → DB-backed, multi-user, roles, chat, presence
  * 
- * Room Lifecycle:
- * ┌─────────────────────────────────────────────────────────────────────┐
- * │  1. ROOM CREATION: Implicit when first user joins via 'join-session'│
- * │  2. USER JOIN: User authenticated and added to room                 │
- * │  3. USER LEAVE: User explicitly leaves or disconnects               │
- * │  4. ROOM DESTROY: Owner ends session OR room becomes empty          │
- * └─────────────────────────────────────────────────────────────────────┘
+ * Both modes share the same PTY/Docker execution engine.
  * 
  * @module socket
  */
@@ -26,6 +22,7 @@ const {
 } = require('./middleware/SessionManagement');
 const logger = require('./utils/logger');
 const { executionManager } = require('./services/executionManager');
+const crypto = require('crypto');
 
 // ============================================================================
 // Constants
@@ -38,18 +35,50 @@ const SUPPORTED_LANGUAGES = {
 };
 
 const DEFAULT_LANGUAGE = 'javascript';
-const MAX_STDIN_CHARS = 64 * 1024; // Keep stdin bursts bounded
+const MAX_STDIN_CHARS = 64 * 1024;
 const TERMINAL_CONTROL_ROLES = new Set(['owner', 'editor']);
 const presenceBySession = new Map();
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+// ============================================================================
+// Playground In-Memory Store
+// ============================================================================
+
+/**
+ * In-memory store for playground sessions.
+ * Each entry: { sessionId, socketId, code, language, createdAt }
+ * No DB persistence, no password, no roles.
+ */
+const playgroundSessions = new Map();
+
+/**
+ * Set of playground sessionIds for O(1) lookup.
+ */
+function isPlayground(sessionId) {
+  return playgroundSessions.has(sessionId);
+}
+
+function generatePlaygroundId() {
+  return 'pg-' + crypto.randomBytes(8).toString('hex');
+}
+
+// ============================================================================
+// Shared Helpers
+// ============================================================================
 
 async function getSessionWithMembership(sessionId, socketId) {
+  // Playground sessions — single user is always a member
+  if (isPlayground(sessionId)) {
+    const pg = playgroundSessions.get(sessionId);
+    if (pg && pg.socketId === socketId) {
+      return { session: pg, isMember: true, isPlaygroundSession: true };
+    }
+    return { session: null, isMember: false, isPlaygroundSession: true };
+  }
+
+  // Collaborative sessions — DB lookup
   const session = await getSession(sessionId);
   const isMember = session?.users?.some(u => u.socketId === socketId) || false;
-  return { session, isMember };
+  return { session, isMember, isPlaygroundSession: false };
 }
 
 function canControlTerminal(user) {
@@ -67,16 +96,10 @@ function getPresenceMap(sessionId) {
 // Socket Server Initialization
 // ============================================================================
 
-/**
- * Initialize the Socket.IO server with CORS configuration.
- * 
- * @param {import('http').Server} httpServer - HTTP server instance
- * @returns {import('socket.io').Server} Configured Socket.IO server
- */
 const initSocket = (httpServer) => {
   const io = new Server(httpServer, {
     cors: {
-      origin: "https://*.jayprajapati.dev",
+      origin: "*",
       methods: ["GET", "POST"],
       allowedHeaders: ["Authorization"],
       credentials: true
@@ -92,6 +115,7 @@ const initSocket = (httpServer) => {
     logger.socket('client_connected', { socketId: socket.id });
 
     const joinedSessions = new Set();
+    const joinedPlaygrounds = new Set();
 
     const terminalHooks = (sessionId) => ({
       onOutput: (chunk) => {
@@ -169,25 +193,65 @@ const initSocket = (httpServer) => {
       }
     };
 
-    // --------------------------------------------------------------------------
-    // ROOM LIFECYCLE: Join Session
-    // --------------------------------------------------------------------------
+    // ========================================================================
+    // PLAYGROUND MODE: Join
+    // ========================================================================
 
     /**
-     * Handle user joining a session room.
+     * Handle playground session creation.
+     * No DB, no password, no roles. Single user only.
      * 
-     * Flow:
-     * 1. Validate session exists and password matches
-     * 2. Add user to session in database
-     * 3. Join socket room
-     * 4. Broadcast user joined to room
-     * 5. Send session data to joining user
-     * 
-     * @emits 'error' - If session invalid or internal error
-     * @emits 'user-list' - Updated user list to all room members
-     * @emits 'user-joined' - Notification to other room members
-     * @emits 'session-data' - Session state to joining user
+     * @emits 'playground-ready' - Session data to the joining user
      */
+    socket.on('join-playground', async (data = {}) => {
+      try {
+        const language = data.language || DEFAULT_LANGUAGE;
+        const sessionId = generatePlaygroundId();
+
+        logger.room('playground_creating', { sessionId, socketId: socket.id });
+
+        // Create in-memory session
+        const pgSession = {
+          sessionId,
+          sessionType: 'playground',
+          socketId: socket.id,
+          code: '',
+          language,
+          active: true,
+          createdAt: Date.now()
+        };
+
+        playgroundSessions.set(sessionId, pgSession);
+
+        // Join socket room
+        socket.join(sessionId);
+        joinedPlaygrounds.add(sessionId);
+
+        // Initialize container
+        await ensureTerminal(sessionId);
+        await executionManager.registerClient(sessionId, terminalHooks(sessionId));
+
+        logger.room('playground_ready', { sessionId, socketId: socket.id });
+
+        // Notify client
+        socket.emit('playground-ready', {
+          sessionId,
+          language
+        });
+
+      } catch (error) {
+        logger.error('join-playground handler failed', error);
+        socket.emit('error', {
+          message: 'Failed to create playground session',
+          code: 'PLAYGROUND_ERROR'
+        });
+      }
+    });
+
+    // ========================================================================
+    // COLLABORATIVE MODE: Join Session
+    // ========================================================================
+
     socket.on('join-session', async (data) => {
       try {
         const { sessionId, password, user, userId } = data;
@@ -275,20 +339,14 @@ const initSocket = (httpServer) => {
       }
     });
 
-    // --------------------------------------------------------------------------
-    // Role Management
-    // --------------------------------------------------------------------------
+    // ========================================================================
+    // Role Management (Collaborative Only)
+    // ========================================================================
 
-    /**
-     * Handle role change requests from session owner.
-     * Only the session owner can change other users' roles.
-     * 
-     * @emits 'role-updated' - New role info to all room members
-     * @emits 'error' - If unauthorized or operation fails
-     */
     socket.on('change-role', async (data) => {
       try {
         const { sessionId, targetUser, newRole } = data;
+        if (isPlayground(sessionId)) return;
 
         logger.debug('role_change_requested', { sessionId, targetUser, newRole });
 
@@ -300,7 +358,6 @@ const initSocket = (httpServer) => {
           });
         }
 
-        // Verify requester is owner
         const requester = session.users.find(u => u.socketId === socket.id);
         if (requester?.role !== 'owner') {
           logger.warn('role_change_unauthorized', {
@@ -313,7 +370,6 @@ const initSocket = (httpServer) => {
           });
         }
 
-        // Update role in database
         await Session.findOneAndUpdate(
           { sessionId, "users.name": targetUser },
           { $set: { "users.$.role": newRole } }
@@ -338,7 +394,6 @@ const initSocket = (httpServer) => {
           });
         }
 
-        // Broadcast role update
         io.to(sessionId).emit('role-updated', {
           user: targetUser,
           newRole: newRole,
@@ -359,15 +414,14 @@ const initSocket = (httpServer) => {
       }
     });
 
-    // --------------------------------------------------------------------------
-    // Terminal Control Transfer (Owner Only)
-    // --------------------------------------------------------------------------
+    // ========================================================================
+    // Terminal Control Transfer (Collaborative Only)
+    // ========================================================================
 
     socket.on('terminal-transfer-control', async (data) => {
       try {
         const { sessionId, targetUser } = data || {};
-
-        if (!sessionId || !targetUser) return;
+        if (!sessionId || !targetUser || isPlayground(sessionId)) return;
 
         logger.debug('terminal_transfer_requested', { sessionId, targetUser });
 
@@ -422,7 +476,7 @@ const initSocket = (httpServer) => {
     socket.on('terminal-request-control', async (data) => {
       try {
         const { sessionId } = data || {};
-        if (!sessionId) return;
+        if (!sessionId || isPlayground(sessionId)) return;
 
         const { session, isMember } = await getSessionWithMembership(sessionId, socket.id);
         if (!session || !isMember) {
@@ -460,25 +514,19 @@ const initSocket = (httpServer) => {
       }
     });
 
-    // --------------------------------------------------------------------------
-    // ROOM LIFECYCLE: End Session (Owner Only)
-    // --------------------------------------------------------------------------
+    // ========================================================================
+    // End Session (Collaborative Only)
+    // ========================================================================
 
-    /**
-     * Handle session termination by owner.
-     * Destroys the room and kicks all users.
-     * 
-     * @emits 'session-ended' - Notification to all room members
-     */
     socket.on('end-session', async (data) => {
       try {
         const { sessionId, userId } = data;
+        if (isPlayground(sessionId)) return;
 
         logger.room('session_end_requested', { sessionId, userId });
 
         const session = await getSession(sessionId);
 
-        // Only owner can end session
         if (session?.owner !== userId) {
           logger.warn('end_session_unauthorized', { sessionId, userId });
           return socket.emit('error', {
@@ -487,11 +535,8 @@ const initSocket = (httpServer) => {
           });
         }
 
-        // Delete session from database
         await Session.deleteOne({ sessionId });
-
         await executionManager.shutdown(sessionId, 'owner_ended', true);
-
         presenceBySession.delete(sessionId);
 
         logger.room('session_destroyed', {
@@ -500,7 +545,6 @@ const initSocket = (httpServer) => {
           userCount: session.users.length
         });
 
-        // Notify all room members
         io.to(sessionId).emit('session-ended', {
           reason: 'owner_ended',
           message: 'The session owner has ended this session'
@@ -517,17 +561,20 @@ const initSocket = (httpServer) => {
       }
     });
 
-    // --------------------------------------------------------------------------
-    // ROOM LIFECYCLE: Leave Session
-    // --------------------------------------------------------------------------
+    // ========================================================================
+    // Leave Session (Collaborative Only)
+    // ========================================================================
 
-    /**
-     * Handle user leaving a session voluntarily.
-     * 
-     * @emits 'user-left' - Notification to remaining room members
-     */
     socket.on('leave-session', async (sessionId) => {
       try {
+        // Playground: just clean up
+        if (isPlayground(sessionId)) {
+          await cleanupPlayground(sessionId);
+          socket.leave(sessionId);
+          joinedPlaygrounds.delete(sessionId);
+          return;
+        }
+
         logger.room('user_leaving', { sessionId, socketId: socket.id });
 
         const session = await getSession(sessionId);
@@ -557,10 +604,7 @@ const initSocket = (httpServer) => {
           name: user.name
         });
 
-        // Remove user from database
         await removeUserFromSession(sessionId, socket.id);
-
-        // Leave socket room
         socket.leave(sessionId);
 
         await executionManager.deregisterClient(sessionId);
@@ -572,13 +616,11 @@ const initSocket = (httpServer) => {
           role: user.role
         });
 
-        // Notify remaining users
         io.to(sessionId).emit('user-left', {
           user: user.name,
           message: `${user.name} has left the session`
         });
 
-        // Check if room should be destroyed (empty after user left)
         const updatedSession = await getSession(sessionId);
         if (updatedSession && updatedSession.users.length === 0) {
           logger.room('session_destroying_empty', { sessionId });
@@ -593,22 +635,25 @@ const initSocket = (httpServer) => {
       }
     });
 
-    // --------------------------------------------------------------------------
+    // ========================================================================
     // Code Synchronization
-    // --------------------------------------------------------------------------
+    // ========================================================================
 
-    /**
-     * Handle real-time code changes.
-     * Broadcasts code to all other room members.
-     * 
-     * @emits 'code-update' - New code to other room members
-     */
     socket.on('code-change', async (data) => {
       try {
         const { sessionId, code } = data || {};
-
         if (!sessionId) return;
 
+        // Playground: store in memory only, no broadcast (single user)
+        if (isPlayground(sessionId)) {
+          const pg = playgroundSessions.get(sessionId);
+          if (pg && pg.socketId === socket.id) {
+            pg.code = code;
+          }
+          return;
+        }
+
+        // Collaborative: DB persist + broadcast
         const { session, isMember } = await getSessionWithMembership(sessionId, socket.id);
         if (!session || !isMember) {
           return socket.emit('error', {
@@ -643,18 +688,14 @@ const initSocket = (httpServer) => {
       }
     });
 
-    // --------------------------------------------------------------------------
-    // Chat
-    // --------------------------------------------------------------------------
+    // ========================================================================
+    // Chat (Collaborative Only)
+    // ========================================================================
 
-    /**
-     * Handle chat messages.
-     * Stores message in database and broadcasts to room.
-     * 
-     * @emits 'chat-message' - Message to all room members
-     */
     socket.on('send-chat-message', async (data) => {
       try {
+        if (isPlayground(data?.sessionId)) return;
+
         const session = await getSession(data.sessionId);
         if (!session) {
           return socket.emit('error', {
@@ -695,14 +736,14 @@ const initSocket = (httpServer) => {
       }
     });
 
-    // --------------------------------------------------------------------------
-    // Presence (non-persistent)
-    // --------------------------------------------------------------------------
+    // ========================================================================
+    // Presence (Collaborative Only)
+    // ========================================================================
 
     socket.on('presence-update', async (data = {}) => {
       try {
         const { sessionId, cursor, selection, file } = data;
-        if (!sessionId) return;
+        if (!sessionId || isPlayground(sessionId)) return;
 
         const { session, isMember } = await getSessionWithMembership(sessionId, socket.id);
         if (!session || !isMember) return;
@@ -723,9 +764,9 @@ const initSocket = (httpServer) => {
       }
     });
 
-    // --------------------------------------------------------------------------
-    // Interactive Terminal
-    // --------------------------------------------------------------------------
+    // ========================================================================
+    // Interactive Terminal (Both Modes)
+    // ========================================================================
 
     socket.on('terminal-input', async (data = {}) => {
       try {
@@ -739,6 +780,21 @@ const initSocket = (httpServer) => {
           });
         }
 
+        // --- Playground: no role checks, single user always has control ---
+        if (isPlayground(sessionId)) {
+          const pg = playgroundSessions.get(sessionId);
+          if (!pg || pg.socketId !== socket.id) {
+            return socket.emit('error', {
+              message: 'Invalid playground session',
+              code: 'NOT_IN_SESSION'
+            });
+          }
+          await ensureTerminal(sessionId);
+          await executionManager.write(sessionId, input);
+          return;
+        }
+
+        // --- Collaborative: full role + controller checks ---
         const { session, isMember } = await getSessionWithMembership(sessionId, socket.id);
         if (!session || !isMember) {
           logger.warn('terminal_input_rejected', { sessionId, socketId: socket.id, hasSession: !!session, isMember });
@@ -802,6 +858,12 @@ const initSocket = (httpServer) => {
         const { sessionId, cols, rows } = data;
         if (!sessionId || !cols || !rows) return;
 
+        // Playground: just resize, no membership check needed
+        if (isPlayground(sessionId)) {
+          await executionManager.resize(sessionId, cols, rows);
+          return;
+        }
+
         const { session, isMember } = await getSessionWithMembership(sessionId, socket.id);
         if (!session || !isMember) return;
 
@@ -815,6 +877,13 @@ const initSocket = (httpServer) => {
       try {
         const { sessionId, userId, force } = data;
         if (!sessionId) return;
+
+        // Playground: anyone can shut down their own session
+        if (isPlayground(sessionId)) {
+          await executionManager.shutdown(sessionId, 'manual_shutdown', !!force);
+          io.to(sessionId).emit('terminal-closed', { sessionId, reason: 'manual_shutdown' });
+          return;
+        }
 
         const session = await getSession(sessionId);
         if (!session) {
@@ -842,16 +911,83 @@ const initSocket = (httpServer) => {
         });
       }
     });
-    /**
-     * Handle code execution requests by injecting commands into the PTY shell.
-     * This enables interactive stdin support for programs like Python input().
-     */
+
+    // ========================================================================
+    // Run Code (Both Modes)
+    // ========================================================================
+
     socket.on('run-code', async (data = {}) => {
       const { sessionId, code = '', language } = data;
 
       logger.debug('code_execution_requested', { sessionId, language });
 
       try {
+        // --- Playground: skip DB, no role checks ---
+        if (isPlayground(sessionId)) {
+          const pg = playgroundSessions.get(sessionId);
+          if (!pg || pg.socketId !== socket.id) {
+            return socket.emit('error', {
+              message: 'Invalid playground session',
+              code: 'SESSION_INVALID'
+            });
+          }
+
+          const langKey = SUPPORTED_LANGUAGES[language] ? language : DEFAULT_LANGUAGE;
+          const langConfig = SUPPORTED_LANGUAGES[langKey];
+
+          if (!SUPPORTED_LANGUAGES[language] && language) {
+            io.to(sessionId).emit('terminal-output', {
+              sessionId,
+              output: `[server] Language ${language} not enabled; using ${langKey}.\n`
+            });
+          }
+
+          if (!isCodeSafe(code, langKey)) {
+            logger.warn('code_execution_blocked: unsafe_code', { sessionId, language: langKey });
+            return io.to(sessionId).emit('terminal-output', {
+              sessionId,
+              output: 'Error: Code contains prohibited patterns\n'
+            });
+          }
+
+          await ensureTerminal(sessionId);
+
+          const sentinel = `__EXEC_DONE_${Date.now()}__`;
+          const delimiter = `EOF_${Date.now()}`;
+          const commands = [
+            `cat > ${langConfig.file} << '${delimiter}'`,
+            code,
+            delimiter,
+            `${langConfig.run}; echo "${sentinel}"`
+          ].join('\n');
+
+          // Listen for sentinel to know execution finished
+          const session = executionManager.sessions.get(sessionId);
+          if (session) {
+            const onData = (chunk) => {
+              const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+              if (text.includes(sentinel)) {
+                session.emitter.off('data', onData);
+                io.to(sessionId).emit('execution-complete', { sessionId });
+                logger.debug('playground_code_execution_complete', { sessionId });
+              }
+            };
+            session.emitter.on('data', onData);
+            // Safety timeout: if sentinel never arrives, reset after 30s
+            setTimeout(() => {
+              session.emitter.off('data', onData);
+              io.to(sessionId).emit('execution-complete', { sessionId });
+            }, 30000);
+          }
+
+          await executionManager.write(sessionId, commands + '\n');
+          io.to(sessionId).emit('execution-started', { sessionId, language: langKey });
+
+          logger.debug('playground_code_execution_started', { sessionId, language: langKey });
+          return;
+        }
+
+        // --- Collaborative: full checks ---
         const { session, isMember } = await getSessionWithMembership(sessionId, socket.id);
 
         if (!session || !session.active) {
@@ -895,23 +1031,36 @@ const initSocket = (httpServer) => {
           });
         }
 
-        // Ensure container is running with multi-language support
         await ensureTerminal(sessionId);
 
-        // Use heredoc to write code file and run it through the PTY
-        // This allows interactive stdin since the PTY has live terminal I/O
+        const sentinel = `__EXEC_DONE_${Date.now()}__`;
         const delimiter = `EOF_${Date.now()}`;
         const commands = [
           `cat > ${langConfig.file} << '${delimiter}'`,
           code,
           delimiter,
-          langConfig.run
+          `${langConfig.run}; echo "${sentinel}"`
         ].join('\n');
 
-        // Write commands to the PTY shell
-        await executionManager.write(sessionId, commands + '\n');
+        // Listen for sentinel to know execution finished
+        const execSession = executionManager.sessions.get(sessionId);
+        if (execSession) {
+          const onData = (chunk) => {
+            const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
+            if (text.includes(sentinel)) {
+              execSession.emitter.off('data', onData);
+              io.to(sessionId).emit('execution-complete', { sessionId });
+              logger.debug('code_execution_complete', { sessionId });
+            }
+          };
+          execSession.emitter.on('data', onData);
+          setTimeout(() => {
+            execSession.emitter.off('data', onData);
+            io.to(sessionId).emit('execution-complete', { sessionId });
+          }, 30000);
+        }
 
-        // Notify that execution has started (output streams via PTY)
+        await executionManager.write(sessionId, commands + '\n');
         io.to(sessionId).emit('execution-started', { sessionId, language: langKey });
 
         logger.debug('code_execution_started', { sessionId, language: langKey });
@@ -925,21 +1074,41 @@ const initSocket = (httpServer) => {
       }
     });
 
-    // --------------------------------------------------------------------------
-    // ROOM LIFECYCLE: Disconnect Cleanup
-    // --------------------------------------------------------------------------
+    // ========================================================================
+    // Playground Cleanup Helper
+    // ========================================================================
 
-    /**
-     * Handle socket disconnection.
-     * Cleans up user from all sessions they were part of.
-     * 
-     * @emits 'user-left' - Notification to remaining room members
-     */
+    async function cleanupPlayground(sessionId) {
+      if (!playgroundSessions.has(sessionId)) return;
+
+      logger.room('playground_destroying', { sessionId });
+      playgroundSessions.delete(sessionId);
+
+      try {
+        await executionManager.deregisterClient(sessionId);
+        await executionManager.shutdown(sessionId, 'playground_disconnect', true);
+      } catch (err) {
+        logger.error('playground_cleanup_failed', err, { sessionId });
+      }
+
+      logger.room('playground_destroyed', { sessionId });
+    }
+
+    // ========================================================================
+    // Disconnect Cleanup (Both Modes)
+    // ========================================================================
+
     socket.on('disconnect', async () => {
       try {
         logger.socket('client_disconnected', { socketId: socket.id });
 
-        // Find all sessions this socket was in
+        // --- Clean up playground sessions ---
+        for (const pgSessionId of joinedPlaygrounds) {
+          await cleanupPlayground(pgSessionId);
+        }
+        joinedPlaygrounds.clear();
+
+        // --- Clean up collaborative sessions ---
         const sessions = await Session.find({
           'users.socketId': socket.id
         });
@@ -960,7 +1129,6 @@ const initSocket = (httpServer) => {
               name: user.name
             });
 
-            // Remove user from session
             await Session.updateOne(
               { sessionId: session.sessionId },
               { $pull: { users: { socketId: socket.id } } }
@@ -974,13 +1142,11 @@ const initSocket = (httpServer) => {
             await executionManager.deregisterClient(session.sessionId);
             joinedSessions.delete(session.sessionId);
 
-            // Notify room
             io.to(session.sessionId).emit('user-left', {
               user: user.name,
               message: `${user.name} has disconnected`
             });
 
-            // Check if room should be destroyed
             const updatedSession = await getSession(session.sessionId);
             if (updatedSession && updatedSession.users.length === 0) {
               logger.room('session_destroying_empty', {

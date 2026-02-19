@@ -4,14 +4,15 @@ import Editor from "@monaco-editor/react";
 import Split from "react-split";
 import { useAuth } from "../contexts/AuthContext";
 import useSocket, { ConnectionState } from "../hooks/useSocket";
+import useStatusChips from "../hooks/useStatusChips";
 import Loader from "../components/Loader";
 import Chat from "../components/Chat";
 import RoleManager from "../components/RoleManager";
 import TerminalUI from "../components/TerminalUI";
 import ConnectionStatus from "../components/ConnectionStatus";
+import StatusChip from "../components/StatusChip";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import { Check, Clipboard, Key, EllipsisVertical } from 'lucide-react'
-
 import Button from '../components/Button';
 
 const LANGUAGE_TEMPLATES = {
@@ -33,7 +34,6 @@ export default function EditorPage() {
   const { sessionId } = useParams();
   const location = useLocation();
 
-  // Use the enhanced useSocket hook with explicit connection states
   const {
     socket,
     isConnected,
@@ -44,6 +44,7 @@ export default function EditorPage() {
   } = useSocket({ roomId: sessionId });
 
   const { currentUser } = useAuth();
+  const { chips, addChip, removeChip } = useStatusChips();
   const editorRef = useRef(null);
   const monacoRef = useRef(null);
   const debounceTimeoutRef = useRef(null);
@@ -75,6 +76,7 @@ export default function EditorPage() {
   });
 
   const [permissionNotice, setPermissionNotice] = useState('');
+  const [isChatOpen, setIsChatOpen] = useState(true);
 
   const { code, language, users, userRole, chatMessages, terminalController } = sessionState;
   const { isCodeRunning, isSessionEnding } = loading;
@@ -188,7 +190,7 @@ export default function EditorPage() {
       }));
     };
 
-    const handleSessionEnded = () => navigate("/dashboard");
+    const handleSessionEnded = () => navigate("/");
     const handleExecutionComplete = () => setLoading((prev) => ({ ...prev, isCodeRunning: false }));
     const handleTerminalControlChanged = ({ controller }) => {
       setSessionState((prev) => ({
@@ -229,6 +231,14 @@ export default function EditorPage() {
       setPermissionNotice(payload.message || 'Action not allowed for your role.');
     };
 
+    const handleTerminalError = (data) => {
+      addChip('error', data?.message || 'Terminal error');
+    };
+
+    const handleTerminalClosed = () => {
+      addChip('warning', 'Terminal session closed');
+    };
+
     socket.emit("join-session", {
       sessionId,
       user: currentUser.displayName,
@@ -250,6 +260,8 @@ export default function EditorPage() {
     socket.on("presence-update", handlePresenceUpdate);
     socket.on("presence-removed", handlePresenceRemoved);
     socket.on("error", handleSocketError);
+    socket.on("terminal-error", handleTerminalError);
+    socket.on("terminal-closed", handleTerminalClosed);
 
     return () => {
       socket.off("session-data", handleSessionData);
@@ -266,8 +278,10 @@ export default function EditorPage() {
       socket.off("presence-update", handlePresenceUpdate);
       socket.off("presence-removed", handlePresenceRemoved);
       socket.off("error", handleSocketError);
+      socket.off("terminal-error", handleTerminalError);
+      socket.off("terminal-closed", handleTerminalClosed);
     };
-  }, [isConnected, socket, sessionId, currentUser, sessionPassword, navigate]);
+  }, [isConnected, socket, sessionId, currentUser, sessionPassword, navigate, addChip]);
 
   useEffect(() => {
     if (!socket?.connected) return;
@@ -287,6 +301,13 @@ export default function EditorPage() {
     const timer = setTimeout(() => setPermissionNotice(''), 3000);
     return () => clearTimeout(timer);
   }, [permissionNotice]);
+
+  // Connection error chip
+  useEffect(() => {
+    if (connectionState === ConnectionState.ERROR) {
+      addChip('error', 'Execution server unavailable');
+    }
+  }, [connectionState, addChip]);
 
   const handleEditorChange = useCallback(
     (value) => {
@@ -338,7 +359,7 @@ export default function EditorPage() {
 
   const handleLeaveSession = () => {
     socket.emit("leave-session", sessionId);
-    navigate("/dashboard");
+    navigate("/");
   };
 
   const handleNewMessage = useCallback((message) => {
@@ -433,16 +454,14 @@ export default function EditorPage() {
     return list.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
   }, [presenceState, currentUser, userRole, fileName]);
 
-  // Show loader during initial connection, if user not authenticated, or if socket not yet available
-  // This ensures TerminalUI and Chat components receive a valid socket prop
-  // Once connected, the ConnectionStatus component handles reconnection states visually
   if (!socket || connectionState === ConnectionState.CONNECTING || !currentUser) {
     return <Loader />;
   }
 
   return (
     <div className="editor-container">
-      {/* Connection status indicator - only visible during issues */}
+      <StatusChip chips={chips} onClose={removeChip} />
+
       <ConnectionStatus
         connectionState={connectionState}
         reconnectInfo={reconnectInfo}
@@ -450,17 +469,18 @@ export default function EditorPage() {
         onRetry={reconnect}
       />
 
+      {/* Editor header */}
       <div className="editor-header">
         <div className="session-details">
           <h2>{sessionId}</h2>
           <CopyToClipboard text={sessionId} onCopy={() => handleCopy("copiedSessionId")}>
             <button title="Copy Session ID" className="copy-btn">
-              {uiState.copiedSessionId ? <Check /> : <Clipboard />}
+              {uiState.copiedSessionId ? <Check size={14} /> : <Clipboard size={14} />}
             </button>
           </CopyToClipboard>
           <CopyToClipboard text={sessionPassword} onCopy={() => handleCopy("copiedPass")}>
             <button title="Copy Password" className="copy-btn">
-              {uiState.copiedPass ? <Check /> : <Key />}
+              {uiState.copiedPass ? <Check size={14} /> : <Key size={14} />}
             </button>
           </CopyToClipboard>
         </div>
@@ -483,7 +503,7 @@ export default function EditorPage() {
                 }
                 title="Manage Users"
               >
-                <EllipsisVertical />
+                <EllipsisVertical size={14} />
               </button>
             )}
           </div>
@@ -504,9 +524,9 @@ export default function EditorPage() {
         {userRole === "owner" ? (
           <Button
             variant="error"
+            size="small"
             onClick={handleEndSession}
             disabled={isSessionEnding}
-            startIcon={isSessionEnding ? <div className="spinner"></div> : null}
             className="end-session-btn"
           >
             {isSessionEnding ? "Ending..." : "End Session"}
@@ -514,6 +534,7 @@ export default function EditorPage() {
         ) : (
           <Button
             variant="warning"
+            size="small"
             onClick={handleLeaveSession}
             disabled={isSessionEnding}
             className="leave-session-btn"
@@ -523,91 +544,94 @@ export default function EditorPage() {
         )}
       </div>
 
-      <div style={{ height: "calc(100vh - 60px)" }}>
-        <Split
-          sizes={[50, 50]}
-          minSize={100}
-          expandToMin={false}
-          gutterSize={10}
-          gutterAlign="center"
-          direction="horizontal"
-          cursor="col-resize"
-          className="wrap"
-        >
-          <div className="h-full">
-            <div className="editor-head">
-              <div className="editor-title">
-                <span>Editor</span>
-              </div>
-              <div className="editor-file-name">
-                Code.{language === "javascript" ? "js" : language === "python" ? "py" : "java"}
-              </div>
-              <div className="editor-actions">
-                <div className="lang-select-wrapper">
-                  <button
-                    className="lang-select"
-                    onClick={() =>
-                      setUiState((prev) => ({
-                        ...prev,
-                        isLangSelectDropdownOpen: !prev.isLangSelectDropdownOpen,
-                      }))
-                    }
-                    disabled={userRole === "viewer"}
-                  >
-                    {toTitleCase(language)} ↓
-                  </button>
-                  {uiState.isLangSelectDropdownOpen && (
-                    <div className="lang-select-dropdown">
-                      {langOptions.map((lang) => (
-                        <div
-                          className="lang-select-option"
-                          key={lang}
-                          onClick={() => handleLanguageChange(lang)}
-                        >
-                          <span
-                            style={{
-                              visibility: lang === language ? "visible" : "hidden",
-                            }}
-                          >✓</span>
-                          {toTitleCase(lang)}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
+      {/* Main content: Editor | Terminal + Chat */}
+      <Split
+        sizes={[50, 50]}
+        minSize={100}
+        expandToMin={false}
+        gutterSize={6}
+        gutterAlign="center"
+        direction="horizontal"
+        cursor="col-resize"
+        className="wrap"
+        style={{ flex: 1, minHeight: 0 }}
+      >
+        {/* Left: Editor */}
+        <div className="h-full" style={{ display: 'flex', flexDirection: 'column' }}>
+          <div className="editor-head">
+            <div className="editor-title">
+              <span>Editor</span>
+            </div>
+            <div className="editor-file-name">
+              {fileName}
+            </div>
+            <div className="editor-actions">
+              <div className="lang-select-wrapper">
                 <button
-                  className="run-button"
-                  onClick={handleRunCode}
-                  disabled={isCodeRunning || userRole === "viewer"}
+                  className="lang-select"
+                  onClick={() =>
+                    setUiState((prev) => ({
+                      ...prev,
+                      isLangSelectDropdownOpen: !prev.isLangSelectDropdownOpen,
+                    }))
+                  }
+                  disabled={userRole === "viewer"}
                 >
-                  {isCodeRunning ? "Running..." : "Run"}
+                  {toTitleCase(language)} ↓
                 </button>
+                {uiState.isLangSelectDropdownOpen && (
+                  <div className="lang-select-dropdown">
+                    {langOptions.map((lang) => (
+                      <div
+                        className="lang-select-option"
+                        key={lang}
+                        onClick={() => handleLanguageChange(lang)}
+                      >
+                        <span
+                          style={{
+                            visibility: lang === language ? "visible" : "hidden",
+                          }}
+                        >✓</span>
+                        {toTitleCase(lang)}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
+
+              <button
+                className="run-button"
+                onClick={handleRunCode}
+                disabled={isCodeRunning || userRole === "viewer"}
+              >
+                {isCodeRunning ? "Running..." : "Run"}
+              </button>
             </div>
-            {permissionNotice && (
-              <div className="permission-notice" role="status" aria-live="polite">
-                {permissionNotice}
-              </div>
-            )}
-            <div className="presence-strip">
-              {presenceList.map((presence) => {
-                const presenceFile = presence.file || "Unknown";
-                const colorIndex = getPresenceColorIndex(presence.socketId || presence.userId || presence.name);
-                return (
-                  <span
-                    key={presence.socketId || presence.userId || presence.name}
-                    className={`presence-pill presence-color-${colorIndex}`}
-                  >
-                    {presence.name}
-                    <span className="presence-file">({presenceFile})</span>
-                  </span>
-                );
-              })}
+          </div>
+          {permissionNotice && (
+            <div className="permission-notice" role="status" aria-live="polite">
+              {permissionNotice}
             </div>
+          )}
+          <div className="presence-strip">
+            {presenceList.map((presence) => {
+              const presenceFile = presence.file || "Unknown";
+              const colorIndex = getPresenceColorIndex(presence.socketId || presence.userId || presence.name);
+              return (
+                <span
+                  key={presence.socketId || presence.userId || presence.name}
+                  className={`presence-pill presence-color-${colorIndex}`}
+                >
+                  {presence.name}
+                  <span className="presence-file">({presenceFile})</span>
+                </span>
+              );
+            })}
+          </div>
+          <div style={{ flex: 1, minHeight: 0 }}>
             <Editor
               width="100%"
-              height="calc(100% - 66px)"
+              height="100%"
               language={language}
               value={code}
               onChange={handleEditorChange}
@@ -658,16 +682,12 @@ export default function EditorPage() {
               options={editorOptions}
             />
           </div>
+        </div>
 
-          <Split
-            sizes={[50, 50]}
-            minSize={[100, 100]}
-            expandToMin={false}
-            gutterSize={10}
-            direction="vertical"
-            cursor="row-resize"
-            className="h-full flex flex-col"
-          >
+        {/* Right: Terminal + Collapsible Chat */}
+        <div className="h-full" style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          {/* Terminal — grows to fill available space */}
+          <div style={{ flex: 1, minHeight: 0 }}>
             <TerminalUI
               socket={socket}
               sessionId={sessionId}
@@ -676,16 +696,26 @@ export default function EditorPage() {
               users={users}
               terminalController={terminalController}
             />
-            <Chat
-              socket={socket}
-              sessionId={sessionId}
-              currentUser={currentUser}
-              messages={chatMessages}
-              onNewMessage={handleNewMessage}
-            />
-          </Split>
-        </Split>
-      </div>
+          </div>
+
+          {/* Collapsible Chat */}
+          <div className={`chat-section ${isChatOpen ? '' : 'collapsed'}`} style={isChatOpen ? { height: '40%', flexShrink: 0 } : {}}>
+            <div className="chat-toggle-bar" onClick={() => setIsChatOpen(!isChatOpen)}>
+              <span className="chat-toggle-label">Chat</span>
+              <span className="chat-toggle-icon">{isChatOpen ? '▼' : '▲'}</span>
+            </div>
+            {isChatOpen && (
+              <Chat
+                socket={socket}
+                sessionId={sessionId}
+                currentUser={currentUser}
+                messages={chatMessages}
+                onNewMessage={handleNewMessage}
+              />
+            )}
+          </div>
+        </div>
+      </Split>
     </div>
   );
 }
