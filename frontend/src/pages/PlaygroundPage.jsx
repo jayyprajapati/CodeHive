@@ -6,7 +6,7 @@ import useSocket, { ConnectionState } from '../hooks/useSocket';
 import TerminalUI from '../components/TerminalUI';
 import StatusChip from '../components/StatusChip';
 import useStatusChips from '../hooks/useStatusChips';
-import Button from '../components/Button';
+import { Play, Loader2, FileCode, ChevronDown, Check, Terminal, X } from 'lucide-react';
 
 const LANGUAGE_TEMPLATES = {
     javascript: '// Start coding here\nconsole.log("Hello, World!");\n',
@@ -124,84 +124,76 @@ export default function PlaygroundPage() {
     const terminalNotReady = !isConnected || connectionState === ConnectionState.ERROR;
 
     return (
-        <div className="playground-container">
+        <div className="sandbox">
             <StatusChip chips={chips} onClose={removeChip} />
 
             {/* End Session Confirm Modal */}
             {showEndConfirm && (
-                <div className="modal-overlay" onClick={() => setShowEndConfirm(false)}>
-                    <div className="modal-box" onClick={(e) => e.stopPropagation()}>
-                        <h3 className="modal-title">End Session?</h3>
-                        <p className="modal-message">
-                            All current work will be lost. This action cannot be undone.
-                        </p>
-                        <div className="modal-actions">
-                            <Button variant="secondary" size="small" onClick={() => setShowEndConfirm(false)}>
-                                Cancel
-                            </Button>
-                            <Button variant="error" size="small" onClick={handleEndSession}>
-                                End Session
-                            </Button>
+                <div className="sandbox-overlay" onClick={() => setShowEndConfirm(false)}>
+                    <div className="sandbox-modal" onClick={(e) => e.stopPropagation()}>
+                        <h3>End Session?</h3>
+                        <p>Your code and terminal output will be lost. This cannot be undone.</p>
+                        <div className="sandbox-modal-footer">
+                            <button className="sandbox-btn sandbox-btn--ghost" onClick={() => setShowEndConfirm(false)}>Cancel</button>
+                            <button className="sandbox-btn sandbox-btn--danger" onClick={handleEndSession}>End Session</button>
                         </div>
                     </div>
                 </div>
             )}
 
-            {/* Top bar */}
-            <div className="playground-header">
-                <div className="playground-header-left">
-                    <span className="playground-file-name">
-                        main.{EXTENSIONS[language]}
-                    </span>
-
-                    <div className="lang-select-wrapper">
-                        <button
-                            className="lang-select"
-                            onClick={() => setShowLangDropdown(!showLangDropdown)}
-                        >
-                            {toTitleCase(language)} ↓
-                        </button>
-                        {showLangDropdown && (
-                            <div className="lang-select-dropdown">
-                                {langOptions.map((lang) => (
-                                    <div
-                                        className="lang-select-option"
-                                        key={lang}
-                                        onClick={() => handleLanguageChange(lang)}
-                                    >
-                                        <span style={{ visibility: lang === language ? 'visible' : 'hidden' }}>✓</span>
-                                        {toTitleCase(lang)}
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
+            {/* Toolbar */}
+            <div className="sandbox-toolbar">
+                <div className="sandbox-toolbar__file">
+                    <FileCode size={15} className="sandbox-toolbar__file-icon" />
+                    <span className="sandbox-toolbar__filename">main.{EXTENSIONS[language]}</span>
                 </div>
 
-                <div className="playground-header-right">
-                    <button
-                        className="run-button"
-                        onClick={handleRunCode}
-                        disabled={isRunning || terminalNotReady}
-                    >
-                        {isRunning ? 'Running...' : 'Run'}
+                <div className="sandbox-toolbar__divider" />
+
+                <div className="sandbox-lang-wrapper">
+                    <button className="sandbox-lang-btn" onClick={() => setShowLangDropdown(!showLangDropdown)}>
+                        {toTitleCase(language)}
+                        <ChevronDown size={13} />
                     </button>
-                    <Button variant="error" size="small" onClick={() => setShowEndConfirm(true)}>
-                        End Session
-                    </Button>
+                    {showLangDropdown && (
+                        <div className="sandbox-dropdown">
+                            {langOptions.map((lang) => (
+                                <button
+                                    key={lang}
+                                    className={`sandbox-dropdown__item ${lang === language ? 'active' : ''}`}
+                                    onClick={() => handleLanguageChange(lang)}
+                                >
+                                    {toTitleCase(lang)}
+                                    {lang === language && <Check size={13} />}
+                                </button>
+                            ))}
+                        </div>
+                    )}
                 </div>
+
+                <div className="sandbox-toolbar__spacer" />
+
+                <button className="sandbox-run" onClick={handleRunCode} disabled={isRunning || terminalNotReady}>
+                    {isRunning ? <Loader2 size={14} className="sandbox-spin" /> : <Play size={14} />}
+                    <span>{isRunning ? 'Running' : 'Run'}</span>
+                </button>
+
+                <button className="sandbox-end" onClick={() => setShowEndConfirm(true)}>
+                    <X size={14} />
+                    <span>End</span>
+                </button>
             </div>
 
-            {/* Split: Editor | Terminal */}
+            {/* Body: Editor | Terminal */}
             <Split
                 sizes={[55, 45]}
                 minSize={200}
-                gutterSize={6}
+                gutterSize={4}
                 direction="horizontal"
                 cursor="col-resize"
-                className="playground-split"
+                className="sandbox-split"
             >
-                <div className="playground-editor-panel">
+                <div className="sandbox-editor">
                     <Editor
                         width="100%"
                         height="100%"
@@ -214,21 +206,48 @@ export default function PlaygroundPage() {
                             scrollBeyondLastLine: false,
                             automaticLayout: true,
                             fontSize: 14,
+                            fontFamily: "'Fira Code', monospace",
+                            fontLigatures: true,
+                            padding: { top: 16 },
+                            renderLineHighlight: 'gutter',
+                            smoothScrolling: true,
+                            cursorBlinking: 'smooth',
+                            cursorSmoothCaretAnimation: 'on',
                         }}
                     />
                 </div>
-                <div className="playground-terminal-panel">
-                    <TerminalUI
-                        socket={socket}
-                        sessionId={sessionId}
-                        currentUser={null}
-                        userRole="owner"
-                        users={[]}
-                        terminalController={null}
-                        sessionType="playground"
-                    />
+
+                <div className="sandbox-terminal-wrapper">
+                    <div className="sandbox-panel-header">
+                        <Terminal size={13} />
+                        <span>Terminal</span>
+                    </div>
+                    <div className="sandbox-panel-content">
+                        <TerminalUI
+                            socket={socket}
+                            sessionId={sessionId}
+                            currentUser={null}
+                            userRole="owner"
+                            users={[]}
+                            terminalController={null}
+                            sessionType="playground"
+                        />
+                    </div>
                 </div>
             </Split>
+
+            {/* Status Bar */}
+            <div className="sandbox-statusbar">
+                <div className="sandbox-statusbar__left">
+                    <div className="sandbox-statusbar__item">
+                        <span className={`sandbox-statusbar__dot ${isConnected ? 'sandbox-statusbar__dot--on' : 'sandbox-statusbar__dot--off'}`} />
+                        <span>{isConnected ? 'Connected' : 'Disconnected'}</span>
+                    </div>
+                </div>
+                <div className="sandbox-statusbar__right">
+                    <span>{toTitleCase(language)}</span>
+                </div>
+            </div>
         </div>
     );
 }

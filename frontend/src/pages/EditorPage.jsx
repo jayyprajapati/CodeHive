@@ -12,8 +12,7 @@ import TerminalUI from "../components/TerminalUI";
 import ConnectionStatus from "../components/ConnectionStatus";
 import StatusChip from "../components/StatusChip";
 import { CopyToClipboard } from "react-copy-to-clipboard";
-import { Check, Clipboard, Key, EllipsisVertical } from 'lucide-react'
-import Button from '../components/Button';
+import { Check, Copy, Key, MoreVertical, Play, Loader2, FileCode, ChevronDown, Terminal as TerminalIcon, MessageSquare, X, LogOut } from 'lucide-react';
 
 const LANGUAGE_TEMPLATES = {
   python: "# New Python Session Started\n\n",
@@ -289,9 +288,10 @@ export default function EditorPage() {
   }, [socket, queuePresenceUpdate, fileName]);
 
   useEffect(() => {
+    const throttle = presenceThrottleRef.current;
     return () => {
-      if (presenceThrottleRef.current.timer) {
-        clearTimeout(presenceThrottleRef.current.timer);
+      if (throttle.timer) {
+        clearTimeout(throttle.timer);
       }
     };
   }, []);
@@ -376,6 +376,14 @@ export default function EditorPage() {
     minimap: { enabled: false },
     scrollBeyondLastLine: false,
     automaticLayout: true,
+    fontSize: 14,
+    fontFamily: "'Fira Code', monospace",
+    fontLigatures: true,
+    padding: { top: 16 },
+    renderLineHighlight: 'gutter',
+    smoothScrolling: true,
+    cursorBlinking: 'smooth',
+    cursorSmoothCaretAnimation: 'on',
   };
 
   useEffect(() => {
@@ -459,7 +467,7 @@ export default function EditorPage() {
   }
 
   return (
-    <div className="editor-container">
+    <div className="sandbox">
       <StatusChip chips={chips} onClose={removeChip} />
 
       <ConnectionStatus
@@ -469,44 +477,46 @@ export default function EditorPage() {
         onRetry={reconnect}
       />
 
-      {/* Editor header */}
-      <div className="editor-header">
-        <div className="session-details">
-          <h2>{sessionId}</h2>
+      {/* Toolbar */}
+      <div className="sandbox-toolbar">
+        {/* Session Info */}
+        <div className="sandbox-session-info">
+          <span className="sandbox-session-id" title={sessionId}>{sessionId}</span>
           <CopyToClipboard text={sessionId} onCopy={() => handleCopy("copiedSessionId")}>
-            <button title="Copy Session ID" className="copy-btn">
-              {uiState.copiedSessionId ? <Check size={14} /> : <Clipboard size={14} />}
+            <button className={`sandbox-copy-btn ${uiState.copiedSessionId ? 'sandbox-copy-btn--copied' : ''}`} title="Copy Session ID">
+              {uiState.copiedSessionId ? <Check size={13} /> : <Copy size={13} />}
             </button>
           </CopyToClipboard>
           <CopyToClipboard text={sessionPassword} onCopy={() => handleCopy("copiedPass")}>
-            <button title="Copy Password" className="copy-btn">
-              {uiState.copiedPass ? <Check size={14} /> : <Key size={14} />}
+            <button className={`sandbox-copy-btn ${uiState.copiedPass ? 'sandbox-copy-btn--copied' : ''}`} title="Copy Password">
+              {uiState.copiedPass ? <Check size={13} /> : <Key size={13} />}
             </button>
           </CopyToClipboard>
         </div>
 
-        <div className="avatar-role-manager">
-          <div className="user-avatars">
-            {users.slice(0, 4).map((user) => (
-              <div key={user.name} className="user-avatar" title={user.name}>
-                {user.name[0].toUpperCase()}
-              </div>
-            ))}
-            {users.length > 0 && userRole === "owner" && (
-              <button
-                className="manage-users-btn"
-                onClick={() =>
-                  setUiState((prev) => ({
-                    ...prev,
-                    toggleRoleManagerDropdown: !prev.toggleRoleManagerDropdown,
-                  }))
-                }
-                title="Manage Users"
-              >
-                <EllipsisVertical size={14} />
-              </button>
-            )}
-          </div>
+        <div className="sandbox-toolbar__divider" />
+
+        {/* Users */}
+        <div className="sandbox-users">
+          {users.slice(0, 4).map((user) => (
+            <div key={user.name} className="sandbox-avatar" title={user.name}>
+              {user.name[0].toUpperCase()}
+            </div>
+          ))}
+          {users.length > 0 && userRole === "owner" && (
+            <button
+              className="sandbox-manage-btn"
+              onClick={() =>
+                setUiState((prev) => ({
+                  ...prev,
+                  toggleRoleManagerDropdown: !prev.toggleRoleManagerDropdown,
+                }))
+              }
+              title="Manage Users"
+            >
+              <MoreVertical size={13} />
+            </button>
+          )}
           {userRole === "owner" && uiState.toggleRoleManagerDropdown && (
             <RoleManager
               users={users}
@@ -521,188 +531,184 @@ export default function EditorPage() {
           )}
         </div>
 
+        <div className="sandbox-toolbar__divider" />
+
+        {/* File + Language */}
+        <div className="sandbox-toolbar__file">
+          <FileCode size={15} className="sandbox-toolbar__file-icon" />
+          <span className="sandbox-toolbar__filename">{fileName}</span>
+        </div>
+
+        <div className="sandbox-lang-wrapper">
+          <button
+            className="sandbox-lang-btn"
+            onClick={() =>
+              setUiState((prev) => ({
+                ...prev,
+                isLangSelectDropdownOpen: !prev.isLangSelectDropdownOpen,
+              }))
+            }
+            disabled={userRole === "viewer"}
+          >
+            {toTitleCase(language)}
+            <ChevronDown size={13} />
+          </button>
+          {uiState.isLangSelectDropdownOpen && (
+            <div className="sandbox-dropdown">
+              {langOptions.map((lang) => (
+                <button
+                  key={lang}
+                  className={`sandbox-dropdown__item ${lang === language ? 'active' : ''}`}
+                  onClick={() => handleLanguageChange(lang)}
+                >
+                  {toTitleCase(lang)}
+                  {lang === language && <Check size={13} />}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="sandbox-toolbar__spacer" />
+
+        {/* Actions */}
+        <button className="sandbox-run" onClick={handleRunCode} disabled={isCodeRunning || userRole === "viewer"}>
+          {isCodeRunning ? <Loader2 size={14} className="sandbox-spin" /> : <Play size={14} />}
+          <span>{isCodeRunning ? 'Running' : 'Run'}</span>
+        </button>
+
         {userRole === "owner" ? (
-          <Button
-            variant="error"
-            size="small"
-            onClick={handleEndSession}
-            disabled={isSessionEnding}
-            className="end-session-btn"
-          >
-            {isSessionEnding ? "Ending..." : "End Session"}
-          </Button>
+          <button className="sandbox-end" onClick={handleEndSession} disabled={isSessionEnding}>
+            <X size={14} />
+            <span>{isSessionEnding ? 'Ending...' : 'End'}</span>
+          </button>
         ) : (
-          <Button
-            variant="warning"
-            size="small"
-            onClick={handleLeaveSession}
-            disabled={isSessionEnding}
-            className="leave-session-btn"
-          >
-            Leave Session
-          </Button>
+          <button className="sandbox-end" onClick={handleLeaveSession}>
+            <LogOut size={14} />
+            <span>Leave</span>
+          </button>
         )}
       </div>
 
-      {/* Main content: Editor | Terminal + Chat */}
+      {/* Presence Strip */}
+      {presenceList.length > 0 && (
+        <div className="sandbox-presence">
+          {presenceList.map((presence) => {
+            const presenceFile = presence.file || "Unknown";
+            const colorIndex = getPresenceColorIndex(presence.socketId || presence.userId || presence.name);
+            return (
+              <span
+                key={presence.socketId || presence.userId || presence.name}
+                className={`sandbox-presence-pill presence-color-${colorIndex}`}
+              >
+                {presence.name}
+                <span className="sandbox-presence-file">({presenceFile})</span>
+              </span>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Permission Notice */}
+      {permissionNotice && (
+        <div className="sandbox-permission-notice" role="status" aria-live="polite">
+          {permissionNotice}
+        </div>
+      )}
+
+      {/* Body: Editor | Terminal + Chat */}
       <Split
         sizes={[50, 50]}
         minSize={100}
         expandToMin={false}
-        gutterSize={6}
+        gutterSize={4}
         gutterAlign="center"
         direction="horizontal"
         cursor="col-resize"
-        className="wrap"
+        className="sandbox-split"
         style={{ flex: 1, minHeight: 0 }}
       >
         {/* Left: Editor */}
-        <div className="h-full" style={{ display: 'flex', flexDirection: 'column' }}>
-          <div className="editor-head">
-            <div className="editor-title">
-              <span>Editor</span>
-            </div>
-            <div className="editor-file-name">
-              {fileName}
-            </div>
-            <div className="editor-actions">
-              <div className="lang-select-wrapper">
-                <button
-                  className="lang-select"
-                  onClick={() =>
-                    setUiState((prev) => ({
-                      ...prev,
-                      isLangSelectDropdownOpen: !prev.isLangSelectDropdownOpen,
-                    }))
-                  }
-                  disabled={userRole === "viewer"}
-                >
-                  {toTitleCase(language)} ↓
-                </button>
-                {uiState.isLangSelectDropdownOpen && (
-                  <div className="lang-select-dropdown">
-                    {langOptions.map((lang) => (
-                      <div
-                        className="lang-select-option"
-                        key={lang}
-                        onClick={() => handleLanguageChange(lang)}
-                      >
-                        <span
-                          style={{
-                            visibility: lang === language ? "visible" : "hidden",
-                          }}
-                        >✓</span>
-                        {toTitleCase(lang)}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+        <div className="sandbox-editor">
+          <Editor
+            width="100%"
+            height="100%"
+            language={language}
+            value={code}
+            onChange={handleEditorChange}
+            theme="vs-dark"
+            onMount={(editor, monaco) => {
+              editorRef.current = editor;
+              monacoRef.current = monaco;
 
-              <button
-                className="run-button"
-                onClick={handleRunCode}
-                disabled={isCodeRunning || userRole === "viewer"}
-              >
-                {isCodeRunning ? "Running..." : "Run"}
-              </button>
-            </div>
-          </div>
-          {permissionNotice && (
-            <div className="permission-notice" role="status" aria-live="polite">
-              {permissionNotice}
-            </div>
-          )}
-          <div className="presence-strip">
-            {presenceList.map((presence) => {
-              const presenceFile = presence.file || "Unknown";
-              const colorIndex = getPresenceColorIndex(presence.socketId || presence.userId || presence.name);
-              return (
-                <span
-                  key={presence.socketId || presence.userId || presence.name}
-                  className={`presence-pill presence-color-${colorIndex}`}
-                >
-                  {presence.name}
-                  <span className="presence-file">({presenceFile})</span>
-                </span>
-              );
-            })}
-          </div>
-          <div style={{ flex: 1, minHeight: 0 }}>
-            <Editor
-              width="100%"
-              height="100%"
-              language={language}
-              value={code}
-              onChange={handleEditorChange}
-              theme="vs-dark"
-              onMount={(editor, monaco) => {
-                editorRef.current = editor;
-                monacoRef.current = monaco;
+              editorDisposableRef.current.forEach((disposable) => disposable.dispose());
+              editorDisposableRef.current = [];
 
-                editorDisposableRef.current.forEach((disposable) => disposable.dispose());
-                editorDisposableRef.current = [];
-
-                editorDisposableRef.current.push(
-                  editor.onDidChangeCursorPosition((event) => {
-                    queuePresenceUpdate({
-                      cursor: {
-                        lineNumber: event.position.lineNumber,
-                        column: event.position.column
-                      }
-                    });
-                  })
-                );
-
-                editorDisposableRef.current.push(
-                  editor.onDidChangeCursorSelection((event) => {
-                    const selection = event.selection;
-                    if (!selection) return;
-                    if (selection.isEmpty()) {
-                      queuePresenceUpdate({ selection: null });
-                      return;
+              editorDisposableRef.current.push(
+                editor.onDidChangeCursorPosition((event) => {
+                  queuePresenceUpdate({
+                    cursor: {
+                      lineNumber: event.position.lineNumber,
+                      column: event.position.column
                     }
-                    const start = selection.getStartPosition
-                      ? selection.getStartPosition()
-                      : { lineNumber: selection.startLineNumber, column: selection.startColumn };
-                    const end = selection.getEndPosition
-                      ? selection.getEndPosition()
-                      : { lineNumber: selection.endLineNumber, column: selection.endColumn };
-                    queuePresenceUpdate({
-                      selection: {
-                        startLineNumber: start.lineNumber,
-                        startColumn: start.column,
-                        endLineNumber: end.lineNumber,
-                        endColumn: end.column
-                      }
-                    });
-                  })
-                );
-              }}
-              options={editorOptions}
-            />
-          </div>
+                  });
+                })
+              );
+
+              editorDisposableRef.current.push(
+                editor.onDidChangeCursorSelection((event) => {
+                  const selection = event.selection;
+                  if (!selection) return;
+                  if (selection.isEmpty()) {
+                    queuePresenceUpdate({ selection: null });
+                    return;
+                  }
+                  const start = selection.getStartPosition
+                    ? selection.getStartPosition()
+                    : { lineNumber: selection.startLineNumber, column: selection.startColumn };
+                  const end = selection.getEndPosition
+                    ? selection.getEndPosition()
+                    : { lineNumber: selection.endLineNumber, column: selection.endColumn };
+                  queuePresenceUpdate({
+                    selection: {
+                      startLineNumber: start.lineNumber,
+                      startColumn: start.column,
+                      endLineNumber: end.lineNumber,
+                      endColumn: end.column
+                    }
+                  });
+                })
+              );
+            }}
+            options={editorOptions}
+          />
         </div>
 
-        {/* Right: Terminal + Collapsible Chat */}
-        <div className="h-full" style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-          {/* Terminal — grows to fill available space */}
-          <div style={{ flex: 1, minHeight: 0 }}>
-            <TerminalUI
-              socket={socket}
-              sessionId={sessionId}
-              currentUser={currentUser}
-              userRole={userRole}
-              users={users}
-              terminalController={terminalController}
-            />
+        {/* Right: Terminal + Chat */}
+        <div className="sandbox-right">
+          <div className="sandbox-terminal-wrapper" style={isChatOpen ? { height: '60%' } : { flex: 1 }}>
+            <div className="sandbox-panel-header">
+              <TerminalIcon size={13} />
+              <span>Terminal</span>
+            </div>
+            <div className="sandbox-panel-content">
+              <TerminalUI
+                socket={socket}
+                sessionId={sessionId}
+                currentUser={currentUser}
+                userRole={userRole}
+                users={users}
+                terminalController={terminalController}
+              />
+            </div>
           </div>
 
-          {/* Collapsible Chat */}
-          <div className={`chat-section ${isChatOpen ? '' : 'collapsed'}`} style={isChatOpen ? { height: '40%', flexShrink: 0 } : {}}>
-            <div className="chat-toggle-bar" onClick={() => setIsChatOpen(!isChatOpen)}>
-              <span className="chat-toggle-label">Chat</span>
-              <span className="chat-toggle-icon">{isChatOpen ? '▼' : '▲'}</span>
+          <div className={`sandbox-chat-section ${isChatOpen ? 'sandbox-chat-section--open' : 'sandbox-chat-section--collapsed'}`}>
+            <div className="sandbox-panel-header sandbox-panel-header--chat" onClick={() => setIsChatOpen(!isChatOpen)}>
+              <MessageSquare size={13} />
+              <span>Chat</span>
+              <div className="sandbox-panel-header__spacer" />
+              <ChevronDown size={12} className={`sandbox-panel-header__toggle ${!isChatOpen ? 'collapsed' : ''}`} />
             </div>
             {isChatOpen && (
               <Chat
@@ -716,6 +722,22 @@ export default function EditorPage() {
           </div>
         </div>
       </Split>
+
+      {/* Status Bar */}
+      <div className="sandbox-statusbar">
+        <div className="sandbox-statusbar__left">
+          <div className="sandbox-statusbar__item">
+            <span className={`sandbox-statusbar__dot ${isConnected ? 'sandbox-statusbar__dot--on' : 'sandbox-statusbar__dot--off'}`} />
+            <span>{isConnected ? 'Connected' : 'Disconnected'}</span>
+          </div>
+          <span className="sandbox-statusbar__item">{users.length + 1} user{users.length !== 0 ? 's' : ''}</span>
+        </div>
+        <div className="sandbox-statusbar__right">
+          <span>{userRole}</span>
+          <span>·</span>
+          <span>{toTitleCase(language)}</span>
+        </div>
+      </div>
     </div>
   );
 }

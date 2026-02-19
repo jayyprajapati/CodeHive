@@ -57,8 +57,16 @@ export default function TerminalUI({
     if (!socket || !terminalRef.current) return;
 
     const term = new Terminal({
-      theme: { background: '#1e1e1e', foreground: '#ffffff' },
-      fontSize: 14,
+      theme: {
+        background: '#09090B',
+        foreground: '#E4E4E7',
+        cursor: '#06B6D4',
+        cursorAccent: '#09090B',
+        selectionBackground: '#27272A',
+        selectionForeground: '#FAFAFA',
+      },
+      fontFamily: "'Fira Code', monospace",
+      fontSize: 13,
       scrollback: 2000,
       convertEol: true,
       disableStdin: false,
@@ -69,7 +77,10 @@ export default function TerminalUI({
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(terminalRef.current);
-    fitAddon.fit();
+    // Defer fit so the container has layout dimensions
+    requestAnimationFrame(() => {
+      try { fitAddon.fit(); } catch { /* container may lack dimensions */ }
+    });
     term.focus();
 
     termRef.current = term;
@@ -196,7 +207,7 @@ export default function TerminalUI({
   useEffect(() => {
     if (isPlayground || !termRef.current) return;
 
-    termRef.current.setOption('disableStdin', !isInputEnabled);
+    termRef.current.options.disableStdin = !isInputEnabled;
 
     const nextState = isInputEnabled ? 'enabled' : 'disabled';
     if (lastControlState.current !== nextState) {
