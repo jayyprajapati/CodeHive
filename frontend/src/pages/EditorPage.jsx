@@ -76,6 +76,7 @@ export default function EditorPage() {
 
   const [permissionNotice, setPermissionNotice] = useState('');
   const [isChatOpen, setIsChatOpen] = useState(true);
+  const [isTerminalOpen, setIsTerminalOpen] = useState(true);
 
   const { code, language, users, userRole, chatMessages, terminalController } = sessionState;
   const { isCodeRunning, isSessionEnding } = loading;
@@ -348,6 +349,7 @@ export default function EditorPage() {
       setPermissionNotice("Viewers cannot run code");
       return;
     }
+    setIsTerminalOpen(true);
     setLoading((prev) => ({ ...prev, isCodeRunning: true }));
     socket.emit("run-code", { sessionId, code, language });
   };
@@ -429,10 +431,6 @@ export default function EditorPage() {
           options: {
             className: `presence-cursor presence-color-${colorIndex}`,
             hoverMessage: { value: presence.name },
-            after: {
-              content: ` ${presence.name} `,
-              inlineClassName: `presence-label presence-color-${colorIndex}`
-            },
             stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
           }
         });
@@ -498,11 +496,20 @@ export default function EditorPage() {
 
         {/* Users */}
         <div className="sandbox-users">
-          {users.slice(0, 4).map((user) => (
-            <div key={user.name} className="sandbox-avatar" title={user.name}>
-              {user.name[0].toUpperCase()}
-            </div>
-          ))}
+          {users.slice(0, 4).map((user) => {
+            const colorIdx = getPresenceColorIndex(
+              Object.values(presenceState).find(p => p.name === user.name)?.socketId || user.name
+            );
+            return (
+              <div
+                key={user.name}
+                className={`sandbox-avatar presence-color-${colorIdx}`}
+                title={user.name}
+              >
+                {user.name[0].toUpperCase()}
+              </div>
+            );
+          })}
           {users.length > 0 && userRole === "owner" && (
             <button
               className="sandbox-manage-btn"
@@ -686,24 +693,28 @@ export default function EditorPage() {
 
         {/* Right: Terminal + Chat */}
         <div className="sandbox-right">
-          <div className="sandbox-terminal-wrapper" style={isChatOpen ? { height: '60%' } : { flex: 1 }}>
-            <div className="sandbox-panel-header">
+          <div className={`sandbox-terminal-wrapper ${!isTerminalOpen ? 'sandbox-terminal-wrapper--collapsed' : ''}`} style={isTerminalOpen ? (isChatOpen ? { height: '60%' } : { flex: 1 }) : {}}>
+            <div className="sandbox-panel-header sandbox-panel-header--terminal" onClick={() => setIsTerminalOpen(!isTerminalOpen)}>
               <TerminalIcon size={13} />
               <span>Terminal</span>
+              <div className="sandbox-panel-header__spacer" />
+              <ChevronDown size={12} className={`sandbox-panel-header__toggle ${!isTerminalOpen ? 'collapsed' : ''}`} />
             </div>
-            <div className="sandbox-panel-content">
-              <TerminalUI
-                socket={socket}
-                sessionId={sessionId}
-                currentUser={currentUser}
-                userRole={userRole}
-                users={users}
-                terminalController={terminalController}
-              />
-            </div>
+            {isTerminalOpen && (
+              <div className="sandbox-panel-content">
+                <TerminalUI
+                  socket={socket}
+                  sessionId={sessionId}
+                  currentUser={currentUser}
+                  userRole={userRole}
+                  users={users}
+                  terminalController={terminalController}
+                />
+              </div>
+            )}
           </div>
 
-          <div className={`sandbox-chat-section ${isChatOpen ? 'sandbox-chat-section--open' : 'sandbox-chat-section--collapsed'}`}>
+          <div className={`sandbox-chat-section ${isChatOpen ? (isTerminalOpen ? 'sandbox-chat-section--open' : 'sandbox-chat-section--expanded') : 'sandbox-chat-section--collapsed'}`}>
             <div className="sandbox-panel-header sandbox-panel-header--chat" onClick={() => setIsChatOpen(!isChatOpen)}>
               <MessageSquare size={13} />
               <span>Chat</span>

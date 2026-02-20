@@ -830,7 +830,9 @@ body,
 }
 
 @keyframes sandbox-spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .sandbox-spin {
@@ -886,6 +888,15 @@ body,
   color: var(--sandbox-text-secondary);
 }
 
+.sandbox-panel-header--terminal {
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.sandbox-panel-header--terminal:hover {
+  color: var(--sandbox-text-secondary);
+}
+
 .sandbox-panel-header__spacer {
   flex: 1;
 }
@@ -905,6 +916,11 @@ body,
   height: 100%;
   min-height: 0;
   overflow: hidden;
+}
+
+.sandbox-terminal-wrapper--collapsed {
+  height: auto !important;
+  flex: none !important;
 }
 
 .sandbox-panel-content {
@@ -945,6 +961,11 @@ body,
 
 .sandbox-chat-section--collapsed {
   flex: none;
+}
+
+.sandbox-chat-section--expanded {
+  flex: 1;
+  min-height: 0;
 }
 
 .sandbox-chat-section .chat-container {
@@ -1063,8 +1084,9 @@ body,
   font-weight: 600;
   color: var(--sandbox-text);
   background: var(--sandbox-surface-3);
-  border: 2px solid var(--sandbox-surface);
+  border: 2px solid var(--presence-color, var(--sandbox-surface));
   margin-left: -4px;
+  transition: border-color 0.2s;
 }
 
 .sandbox-avatar:first-child {
@@ -1517,36 +1539,60 @@ body,
 
 /* --- Presence Cursor Colors (collaborative editor) --- */
 .presence-cursor {
-  border-left: 2px solid var(--presence-color, var(--sandbox-accent));
+  border-left: 3px solid var(--presence-color, var(--sandbox-accent));
 }
 
 .presence-selection {
   background: rgba(6, 182, 212, 0.12);
 }
 
-.presence-label {
-  background: var(--presence-color, var(--sandbox-accent));
-  color: #fff;
-  border-radius: 3px;
-  padding: 0 4px;
-  margin-left: 2px;
-  font-size: 0.62rem;
-  font-weight: 600;
+.presence-color-0 {
+  --presence-color: #06B6D4;
 }
 
-.presence-color-0 { --presence-color: #06B6D4; }
-.presence-color-1 { --presence-color: #F59E0B; }
-.presence-color-2 { --presence-color: #22C55E; }
-.presence-color-3 { --presence-color: #EF4444; }
-.presence-color-4 { --presence-color: #A855F7; }
-.presence-color-5 { --presence-color: #14B8A6; }
+.presence-color-1 {
+  --presence-color: #F59E0B;
+}
 
-.presence-selection.presence-color-0 { background: rgba(6, 182, 212, 0.12); }
-.presence-selection.presence-color-1 { background: rgba(245, 158, 11, 0.12); }
-.presence-selection.presence-color-2 { background: rgba(34, 197, 94, 0.12); }
-.presence-selection.presence-color-3 { background: rgba(239, 68, 68, 0.12); }
-.presence-selection.presence-color-4 { background: rgba(168, 85, 247, 0.12); }
-.presence-selection.presence-color-5 { background: rgba(20, 184, 166, 0.12); }
+.presence-color-2 {
+  --presence-color: #22C55E;
+}
+
+.presence-color-3 {
+  --presence-color: #EF4444;
+}
+
+.presence-color-4 {
+  --presence-color: #A855F7;
+}
+
+.presence-color-5 {
+  --presence-color: #14B8A6;
+}
+
+.presence-selection.presence-color-0 {
+  background: rgba(6, 182, 212, 0.12);
+}
+
+.presence-selection.presence-color-1 {
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.presence-selection.presence-color-2 {
+  background: rgba(34, 197, 94, 0.12);
+}
+
+.presence-selection.presence-color-3 {
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.presence-selection.presence-color-4 {
+  background: rgba(168, 85, 247, 0.12);
+}
+
+.presence-selection.presence-color-5 {
+  background: rgba(20, 184, 166, 0.12);
+}
 
 /* --- Role Manager (Rooms) --- */
 .role-manager {
@@ -1883,4 +1929,3 @@ body,
 .alert-close:hover {
   color: var(--text);
 }
-
