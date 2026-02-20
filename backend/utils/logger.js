@@ -27,7 +27,8 @@ const LogCategory = Object.freeze({
     SOCKET: 'socket',
     SESSION: 'session',
     ERROR: 'error',
-    SYSTEM: 'system'
+    SYSTEM: 'system',
+    SAFETY: 'safety'
 });
 
 /**
@@ -138,6 +139,16 @@ function warn(message, context = {}) {
 }
 
 /**
+ * Log safety / resource-limit events (always at WARN level)
+ *
+ * @param {string} event - Safety event name
+ * @param {Object} context - Context data
+ */
+function safety(event, context = {}) {
+    log(LogLevel.WARN, LogCategory.SAFETY, event, context);
+}
+
+/**
  * Log error with optional error object
  * 
  * @param {string} message - Error message
@@ -176,5 +187,6 @@ module.exports = {
     session,
     debug,
     warn,
+    safety,
     error
 };

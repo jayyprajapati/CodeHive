@@ -22,6 +22,7 @@ const {
 } = require('./middleware/SessionManagement');
 const logger = require('./utils/logger');
 const { executionManager } = require('./services/executionManager');
+const limits = require('./config/resourceLimits');
 const crypto = require('crypto');
 
 // ============================================================================
@@ -38,6 +39,30 @@ const DEFAULT_LANGUAGE = 'javascript';
 const MAX_STDIN_CHARS = 64 * 1024;
 const TERMINAL_CONTROL_ROLES = new Set(['owner', 'editor']);
 const presenceBySession = new Map();
+
+// ============================================================================
+// Global Session Counter
+// ============================================================================
+
+let activeSessionCount = 0;
+
+function getActiveSessionCount() {
+  return activeSessionCount;
+}
+
+function incrementSessionCount() {
+  activeSessionCount++;
+  logger.debug('session_count_incremented', { count: activeSessionCount });
+}
+
+function decrementSessionCount() {
+  activeSessionCount = Math.max(0, activeSessionCount - 1);
+  logger.debug('session_count_decremented', { count: activeSessionCount });
+}
+
+function isCapacityAvailable() {
+  return activeSessionCount < limits.MAX_ACTIVE_SESSIONS;
+}
 
 // ============================================================================
 // Playground In-Memory Store
@@ -126,14 +151,36 @@ const initSocket = (httpServer) => {
           output
         });
       },
-      onExit: (reason) => io.to(sessionId).emit('terminal-closed', {
-        sessionId,
-        reason
-      })
+      onExit: (reason) => {
+        // Emit specific terminal-error events for OOM and timeout
+        if (reason === 'memory_limit_exceeded') {
+          io.to(sessionId).emit('terminal-error', {
+            sessionId,
+            reason: 'memory_limit_exceeded',
+            message: 'Container killed: memory limit exceeded'
+          });
+        }
+        io.to(sessionId).emit('terminal-closed', {
+          sessionId,
+          reason
+        });
+      }
     });
 
     const ensureTerminal = async (sessionId) => {
-      await executionManager.ensureSession(sessionId, terminalHooks(sessionId));
+      try {
+        await executionManager.ensureSession(sessionId, terminalHooks(sessionId));
+      } catch (err) {
+        if (err.message === 'CONTAINER_LIMIT_REACHED') {
+          logger.safety('container_spawn_failed', { sessionId, reason: 'container_limit' });
+          socket.emit('error', {
+            message: 'Server container limit reached. Please try again later.',
+            code: 'CONTAINER_LIMIT_REACHED'
+          });
+          throw err;
+        }
+        throw err;
+      }
     };
 
     const getControllerPayload = (user) => {
@@ -205,6 +252,20 @@ const initSocket = (httpServer) => {
      */
     socket.on('join-playground', async (data = {}) => {
       try {
+        // ── Session cap check ──
+        if (!isCapacityAvailable()) {
+          logger.safety('server_capacity_reached', {
+            socketId: socket.id,
+            activeSessionCount: getActiveSessionCount(),
+            max: limits.MAX_ACTIVE_SESSIONS,
+            type: 'playground'
+          });
+          return socket.emit('error', {
+            message: 'Server is at capacity. Please try again later.',
+            code: 'SERVER_CAPACITY_REACHED'
+          });
+        }
+
         const language = data.language || DEFAULT_LANGUAGE;
         const sessionId = generatePlaygroundId();
 
@@ -222,6 +283,7 @@ const initSocket = (httpServer) => {
         };
 
         playgroundSessions.set(sessionId, pgSession);
+        incrementSessionCount();
 
         // Join socket room
         socket.join(sessionId);
@@ -230,6 +292,25 @@ const initSocket = (httpServer) => {
         // Initialize container
         await ensureTerminal(sessionId);
         await executionManager.registerClient(sessionId, terminalHooks(sessionId));
+
+        // Listen for execution timeout events from this session
+        const execSession = executionManager.sessions.get(sessionId);
+        if (execSession) {
+          execSession.emitter.on('execution_timeout', () => {
+            io.to(sessionId).emit('terminal-error', {
+              sessionId,
+              reason: 'execution_time_exceeded',
+              message: 'Code execution timed out'
+            });
+          });
+          execSession.emitter.on('oom', () => {
+            io.to(sessionId).emit('terminal-error', {
+              sessionId,
+              reason: 'memory_limit_exceeded',
+              message: 'Container killed: memory limit exceeded'
+            });
+          });
+        }
 
         logger.room('playground_ready', { sessionId, socketId: socket.id });
 
@@ -255,6 +336,20 @@ const initSocket = (httpServer) => {
     socket.on('join-session', async (data) => {
       try {
         const { sessionId, password, user, userId } = data;
+
+        // ── Session cap check ──
+        if (!isCapacityAvailable()) {
+          logger.safety('server_capacity_reached', {
+            socketId: socket.id,
+            activeSessionCount: getActiveSessionCount(),
+            max: limits.MAX_ACTIVE_SESSIONS,
+            type: 'collaborative'
+          });
+          return socket.emit('error', {
+            message: 'Server is at capacity. Please try again later.',
+            code: 'SERVER_CAPACITY_REACHED'
+          });
+        }
 
         logger.room('user_joining', { sessionId, userName: user, socketId: socket.id });
 
@@ -327,6 +422,26 @@ const initSocket = (httpServer) => {
 
         await executionManager.registerClient(sessionId, terminalHooks(sessionId));
         joinedSessions.add(sessionId);
+        incrementSessionCount();
+
+        // Listen for execution timeout / OOM events from this session
+        const execSession = executionManager.sessions.get(sessionId);
+        if (execSession) {
+          execSession.emitter.on('execution_timeout', () => {
+            io.to(sessionId).emit('terminal-error', {
+              sessionId,
+              reason: 'execution_time_exceeded',
+              message: 'Code execution timed out'
+            });
+          });
+          execSession.emitter.on('oom', () => {
+            io.to(sessionId).emit('terminal-error', {
+              sessionId,
+              reason: 'memory_limit_exceeded',
+              message: 'Container killed: memory limit exceeded'
+            });
+          });
+        }
 
       } catch (error) {
         logger.error('join-session handler failed', error, {
@@ -538,6 +653,7 @@ const initSocket = (httpServer) => {
         await Session.deleteOne({ sessionId });
         await executionManager.shutdown(sessionId, 'owner_ended', true);
         presenceBySession.delete(sessionId);
+        decrementSessionCount();
 
         logger.room('session_destroyed', {
           sessionId,
@@ -628,6 +744,7 @@ const initSocket = (httpServer) => {
           await executionManager.shutdown(sessionId, 'room_empty');
           logger.room('session_destroyed', { sessionId, reason: 'empty' });
           presenceBySession.delete(sessionId);
+          decrementSessionCount();
         }
 
       } catch (error) {
@@ -952,6 +1069,9 @@ const initSocket = (httpServer) => {
 
           await ensureTerminal(sessionId);
 
+          // Start execution timer — will SIGINT then SIGKILL on timeout
+          const execTimer = executionManager.startExecutionTimer(sessionId);
+
           const sentinel = `__EXEC_DONE_${Date.now()}__`;
           const delimiter = `EOF_${Date.now()}`;
           const commands = [
@@ -968,16 +1088,17 @@ const initSocket = (httpServer) => {
               const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
               if (text.includes(sentinel)) {
                 session.emitter.off('data', onData);
+                execTimer.cancel();
                 io.to(sessionId).emit('execution-complete', { sessionId });
                 logger.debug('playground_code_execution_complete', { sessionId });
               }
             };
             session.emitter.on('data', onData);
-            // Safety timeout: if sentinel never arrives, reset after 30s
-            setTimeout(() => {
+            // Safety fallback: cancel listener if execution timer fires
+            session.emitter.once('execution_timeout', () => {
               session.emitter.off('data', onData);
               io.to(sessionId).emit('execution-complete', { sessionId });
-            }, 30000);
+            });
           }
 
           await executionManager.write(sessionId, commands + '\n');
@@ -1033,6 +1154,9 @@ const initSocket = (httpServer) => {
 
         await ensureTerminal(sessionId);
 
+        // Start execution timer — will SIGINT then SIGKILL on timeout
+        const execTimer = executionManager.startExecutionTimer(sessionId);
+
         const sentinel = `__EXEC_DONE_${Date.now()}__`;
         const delimiter = `EOF_${Date.now()}`;
         const commands = [
@@ -1049,15 +1173,17 @@ const initSocket = (httpServer) => {
             const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
             if (text.includes(sentinel)) {
               execSession.emitter.off('data', onData);
+              execTimer.cancel();
               io.to(sessionId).emit('execution-complete', { sessionId });
               logger.debug('code_execution_complete', { sessionId });
             }
           };
           execSession.emitter.on('data', onData);
-          setTimeout(() => {
+          // Safety fallback: cancel listener if execution timer fires
+          execSession.emitter.once('execution_timeout', () => {
             execSession.emitter.off('data', onData);
             io.to(sessionId).emit('execution-complete', { sessionId });
-          }, 30000);
+          });
         }
 
         await executionManager.write(sessionId, commands + '\n');
@@ -1083,6 +1209,7 @@ const initSocket = (httpServer) => {
 
       logger.room('playground_destroying', { sessionId });
       playgroundSessions.delete(sessionId);
+      decrementSessionCount();
 
       try {
         await executionManager.deregisterClient(sessionId);
@@ -1159,6 +1286,7 @@ const initSocket = (httpServer) => {
                 reason: 'empty_after_disconnect'
               });
               presenceBySession.delete(session.sessionId);
+              decrementSessionCount();
             }
           }
         }
