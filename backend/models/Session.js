@@ -5,6 +5,7 @@ const MongoStore = require('connect-mongo');
 
 const sessionSchema = new mongoose.Schema({
     sessionId: String,
+    title: String,
     users: [{
       socketId: String,
       name: String,
@@ -12,8 +13,10 @@ const sessionSchema = new mongoose.Schema({
       role: String
     }],
     code: String,
+    language: String,
     chat: [{
       user: String,
+      senderId: String,
       message: String,
       timestamp: Date
     }],

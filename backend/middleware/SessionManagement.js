@@ -3,13 +3,15 @@ const crypto = require('crypto');
 // const NodeCache = require('node-cache');
 
 // Create new session
-async function createSession(sessionId, password, owner) {
+async function createSession(sessionId, password, owner, language, title) {
   try {
     const hashedPassword = crypto.createHash('sha256').update(password).digest('hex');
     const session = new Session({
       sessionId,
+      title: title || '',
       users: [],
       code: '// New session started...',
+      language: language || 'javascript',
       chat: [],
       password: hashedPassword,
       owner,

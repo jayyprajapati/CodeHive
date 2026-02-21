@@ -12,10 +12,10 @@ export const verifySession = async (sessionId, password) => {
     }
   };
 
-  export const createNewSession = async (sessionId, password, owner) => {
+  export const createNewSession = async (sessionId, password, owner, language, title) => {
     try {
         const createSessionEndpoint = import.meta.env.VITE_WEBSOCKET_URL + '/api/validateSession/create-session';
-        const response = await axios.post(createSessionEndpoint, { sessionId, password, owner });
+        const response = await axios.post(createSessionEndpoint, { sessionId, password, owner, language, title });
         if (response.status !== 200) throw new Error('Session Creation failed');
         return await response.data;
     } catch (error) {

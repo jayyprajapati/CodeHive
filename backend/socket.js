@@ -367,6 +367,15 @@ const initSocket = (httpServer) => {
 
         const session = await getSession(sessionId);
 
+        // Max 5 members per room
+        if (session && session.users.length >= 5) {
+          logger.warn('join_failed: room_full', { sessionId, userName: user, currentUsers: session.users.length });
+          return socket.emit('error', {
+            message: 'This room is full (max 5 members)',
+            code: 'ROOM_FULL'
+          });
+        }
+
         // Create user entry
         const userEntry = {
           socketId: socket.id,
@@ -407,7 +416,10 @@ const initSocket = (httpServer) => {
           code: updatedSession.code,
           chat: updatedSession.chat,
           role: updatedSession.users.find(u => u.socketId === socket.id)?.role || 'viewer',
-          terminalController: updatedSession.terminalController || null
+          language: updatedSession.language || 'javascript',
+          ownerId: updatedSession.owner,
+          terminalController: updatedSession.terminalController || null,
+          title: updatedSession.title || ''
         });
 
         const presence = updatePresence(sessionId, userEntry);
@@ -630,6 +642,57 @@ const initSocket = (httpServer) => {
     });
 
     // ========================================================================
+    // Transfer Ownership (Collaborative Only)
+    // ========================================================================
+
+    socket.on('transfer-ownership', async (data = {}) => {
+      try {
+        const { sessionId, targetUserName } = data;
+        if (!sessionId || !targetUserName || isPlayground(sessionId)) return;
+
+        const session = await getSession(sessionId);
+        if (!session) {
+          return socket.emit('error', { message: 'Session not found', code: 'SESSION_NOT_FOUND' });
+        }
+
+        const requester = session.users.find(u => u.socketId === socket.id);
+        if (!requester || requester.userId !== session.owner) {
+          return socket.emit('error', { message: 'Only the session owner can transfer ownership', code: 'UNAUTHORIZED' });
+        }
+
+        const target = session.users.find(u => u.name === targetUserName);
+        if (!target) {
+          return socket.emit('error', { message: 'Target user not found in session', code: 'USER_NOT_FOUND' });
+        }
+
+        // Update owner field and roles in DB
+        await Session.findOneAndUpdate(
+          { sessionId, 'users.userId': target.userId },
+          { $set: { owner: target.userId, 'users.$.role': 'owner' } }
+        );
+        await Session.findOneAndUpdate(
+          { sessionId, 'users.userId': requester.userId },
+          { $set: { 'users.$.role': 'editor' } }
+        );
+
+        const updatedSession = await getSession(sessionId);
+
+        logger.room('ownership_transferred', { sessionId, from: requester.name, to: target.name });
+
+        io.to(sessionId).emit('ownership-transferred', { newOwnerId: target.userId });
+        io.to(sessionId).emit('role-updated', {
+          user: target.name,
+          newRole: 'owner',
+          userList: updatedSession.users.map(u => ({ name: u.name, role: u.role }))
+        });
+
+      } catch (error) {
+        logger.error('transfer-ownership handler failed', error, { sessionId: data?.sessionId });
+        socket.emit('error', { message: 'Failed to transfer ownership', code: 'TRANSFER_ERROR' });
+      }
+    });
+
+    // ========================================================================
     // End Session (Collaborative Only)
     // ========================================================================
 
@@ -753,6 +816,23 @@ const initSocket = (httpServer) => {
     });
 
     // ========================================================================
+    // Language Change (Block in Collaborative — language is immutable)
+    // ========================================================================
+
+    socket.on('language-change', async (data = {}) => {
+      const { sessionId } = data;
+      if (!sessionId) return;
+      // Playground: allow language changes (handled client-side)
+      if (isPlayground(sessionId)) return;
+      // Collaborative: language is set at room creation and cannot be changed
+      logger.warn('language_change_blocked', { sessionId, socketId: socket.id });
+      socket.emit('error', {
+        message: 'Language cannot be changed after room creation',
+        code: 'PERMISSION_DENIED'
+      });
+    });
+
+    // ========================================================================
     // Code Synchronization
     // ========================================================================
 
@@ -831,6 +911,7 @@ const initSocket = (httpServer) => {
 
         const message = {
           user: user.name,
+          senderId: user.userId,
           message: data.message,
           timestamp: new Date().toISOString()
         };
@@ -878,6 +959,62 @@ const initSocket = (httpServer) => {
           sessionId: data?.sessionId,
           error: error.message
         });
+      }
+    });
+
+    // ========================================================================
+    // Execution Requests (Collaborative Only)
+    // ========================================================================
+
+    socket.on('execution-request', async (data = {}) => {
+      try {
+        const { sessionId } = data;
+        if (!sessionId || isPlayground(sessionId)) return;
+
+        const session = await getSession(sessionId);
+        if (!session) return;
+
+        const requester = session.users.find(u => u.socketId === socket.id);
+        if (!requester || requester.role === 'viewer') {
+          return socket.emit('error', {
+            message: 'Viewers cannot request execution',
+            code: 'PERMISSION_DENIED'
+          });
+        }
+
+        const ownerUser = session.users.find(u => u.userId === session.owner);
+        if (!ownerUser) return;
+
+        logger.debug('execution_request', { sessionId, requester: requester.name, owner: ownerUser.name });
+
+        io.to(ownerUser.socketId).emit('execution-request', {
+          sessionId,
+          requesterName: requester.name,
+          requesterSocketId: socket.id
+        });
+      } catch (error) {
+        logger.error('execution-request handler failed', error, { sessionId: data?.sessionId });
+      }
+    });
+
+    socket.on('execution-decline', async (data = {}) => {
+      try {
+        const { sessionId, requesterSocketId } = data;
+        if (!sessionId || isPlayground(sessionId)) return;
+
+        const session = await getSession(sessionId);
+        if (!session) return;
+
+        const user = session.users.find(u => u.socketId === socket.id);
+        if (!user || user.userId !== session.owner) return;
+
+        logger.debug('execution_declined', { sessionId, requesterSocketId });
+
+        io.to(requesterSocketId).emit('execution-rejected', {
+          message: 'Execution request declined by owner'
+        });
+      } catch (error) {
+        logger.error('execution-decline handler failed', error, { sessionId: data?.sessionId });
       }
     });
 
@@ -1126,10 +1263,10 @@ const initSocket = (httpServer) => {
         }
 
         const user = session.users.find(u => u.socketId === socket.id);
-        if (!user || user.role === 'viewer') {
-          logger.warn('run_code_rejected_role', { sessionId, socketId: socket.id, role: user?.role });
+        if (!user || user.userId !== session.owner) {
+          logger.warn('run_code_rejected_not_owner', { sessionId, socketId: socket.id, role: user?.role });
           return socket.emit('error', {
-            message: 'Viewers cannot run code',
+            message: 'Only the session owner can run code directly',
             code: 'PERMISSION_DENIED'
           });
         }

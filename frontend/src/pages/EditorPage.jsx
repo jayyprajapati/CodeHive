@@ -12,7 +12,7 @@ import TerminalUI from "../components/TerminalUI";
 import ConnectionStatus from "../components/ConnectionStatus";
 import StatusChip from "../components/StatusChip";
 import { CopyToClipboard } from "react-copy-to-clipboard";
-import { Check, Copy, Key, MoreVertical, Play, Loader2, FileCode, ChevronDown, Terminal as TerminalIcon, MessageSquare, X, LogOut } from 'lucide-react';
+import { Check, Copy, Key, MoreVertical, Play, Loader2, FileCode, ChevronDown, Terminal as TerminalIcon, MessageSquare, X, LogOut, Download } from 'lucide-react';
 
 const LANGUAGE_TEMPLATES = {
   python: "# New Python Session Started\n\n",
@@ -58,6 +58,8 @@ export default function EditorPage() {
     userRole: "editor",
     chatMessages: [],
     terminalController: null,
+    ownerId: null,
+    sessionTitle: "",
   });
 
   const [presenceState, setPresenceState] = useState({});
@@ -72,14 +74,21 @@ export default function EditorPage() {
   const [loading, setLoading] = useState({
     isCodeRunning: false,
     isSessionEnding: false,
+    requestingExecution: false,
   });
 
   const [permissionNotice, setPermissionNotice] = useState('');
   const [isChatOpen, setIsChatOpen] = useState(true);
   const [isTerminalOpen, setIsTerminalOpen] = useState(true);
+  const [executionRequest, setExecutionRequest] = useState(null);
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+  const [showEndModal, setShowEndModal] = useState(false);
+  const [showTransferPicker, setShowTransferPicker] = useState(false);
+  const [transferTarget, setTransferTarget] = useState('');
+  const [pendingNavigation, setPendingNavigation] = useState(null);
 
-  const { code, language, users, userRole, chatMessages, terminalController } = sessionState;
-  const { isCodeRunning, isSessionEnding } = loading;
+  const { code, language, users, userRole, chatMessages, terminalController, ownerId, sessionTitle } = sessionState;
+  const { isCodeRunning, isSessionEnding, requestingExecution } = loading;
   const sessionPassword = location.state?.sessionPassword;
 
   const getFileName = useCallback((lang) => {
@@ -136,7 +145,9 @@ export default function EditorPage() {
       chat,
       role,
       language: initialLanguage,
-      terminalController: controller
+      ownerId: sessionOwnerId,
+      terminalController: controller,
+      title: sessionTitle
     }) => {
       setSessionState((prev) => ({
         ...prev,
@@ -145,6 +156,8 @@ export default function EditorPage() {
         chatMessages: chat || [],
         language: initialLanguage || prev.language,
         terminalController: controller || null,
+        ownerId: sessionOwnerId || null,
+        sessionTitle: sessionTitle || '',
       }));
     };
 
@@ -190,8 +203,26 @@ export default function EditorPage() {
       }));
     };
 
-    const handleSessionEnded = () => navigate("/");
+    const handleSessionEnded = () => {
+      window.__codehive_leaving = true;
+      navigate("/");
+    };
+
+    const handleOwnershipTransferred = ({ newOwnerId }) => {
+      setSessionState((prev) => {
+        const newRole = currentUser.uid === newOwnerId ? 'owner' : prev.userRole;
+        return { ...prev, ownerId: newOwnerId, userRole: newRole };
+      });
+    };
     const handleExecutionComplete = () => setLoading((prev) => ({ ...prev, isCodeRunning: false }));
+    const handleExecutionStarted = () => setLoading((prev) => ({ ...prev, requestingExecution: false, isCodeRunning: true }));
+    const handleExecutionRequest = ({ requesterName, requesterSocketId }) => {
+      setExecutionRequest({ requesterName, requesterSocketId });
+    };
+    const handleExecutionRejected = () => {
+      setLoading((prev) => ({ ...prev, requestingExecution: false }));
+      addChip('warning', 'Execution request was declined');
+    };
     const handleTerminalControlChanged = ({ controller }) => {
       setSessionState((prev) => ({
         ...prev,
@@ -255,7 +286,11 @@ export default function EditorPage() {
     socket.on("chat-message", handleChatMessage);
     socket.on("session-ended", handleSessionEnded);
     socket.on("execution-complete", handleExecutionComplete);
+    socket.on("execution-started", handleExecutionStarted);
+    socket.on("execution-request", handleExecutionRequest);
+    socket.on("execution-rejected", handleExecutionRejected);
     socket.on("terminal-control-changed", handleTerminalControlChanged);
+    socket.on("ownership-transferred", handleOwnershipTransferred);
     socket.on("presence-state", handlePresenceState);
     socket.on("presence-update", handlePresenceUpdate);
     socket.on("presence-removed", handlePresenceRemoved);
@@ -273,7 +308,11 @@ export default function EditorPage() {
       socket.off("chat-message", handleChatMessage);
       socket.off("session-ended", handleSessionEnded);
       socket.off("execution-complete", handleExecutionComplete);
+      socket.off("execution-started", handleExecutionStarted);
+      socket.off("execution-request", handleExecutionRequest);
+      socket.off("execution-rejected", handleExecutionRejected);
       socket.off("terminal-control-changed", handleTerminalControlChanged);
+      socket.off("ownership-transferred", handleOwnershipTransferred);
       socket.off("presence-state", handlePresenceState);
       socket.off("presence-update", handlePresenceUpdate);
       socket.off("presence-removed", handlePresenceRemoved);
@@ -309,6 +348,32 @@ export default function EditorPage() {
       addChip('error', 'Execution server unavailable');
     }
   }, [connectionState, addChip]);
+
+  // beforeunload warning
+  useEffect(() => {
+    const handler = (e) => {
+      if (window.__codehive_leaving) return;
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, []);
+
+  // popstate (browser back) interception
+  useEffect(() => {
+    const handler = () => {
+      window.history.pushState(null, '', window.location.href);
+      if (userRole === 'owner') {
+        setShowEndModal(true);
+      } else {
+        setShowLeaveConfirm(true);
+      }
+    };
+    window.history.pushState(null, '', window.location.href);
+    window.addEventListener('popstate', handler);
+    return () => window.removeEventListener('popstate', handler);
+  }, [userRole]);
 
   const handleEditorChange = useCallback(
     (value) => {
@@ -349,9 +414,43 @@ export default function EditorPage() {
       setPermissionNotice("Viewers cannot run code");
       return;
     }
+    const isOwner = ownerId === currentUser?.uid;
+    if (!isOwner) {
+      setLoading((prev) => ({ ...prev, requestingExecution: true }));
+      socket.emit("execution-request", { sessionId });
+      return;
+    }
     setIsTerminalOpen(true);
     setLoading((prev) => ({ ...prev, isCodeRunning: true }));
     socket.emit("run-code", { sessionId, code, language });
+  };
+
+  const handleApproveExecution = () => {
+    setExecutionRequest(null);
+    setIsTerminalOpen(true);
+    setLoading((prev) => ({ ...prev, isCodeRunning: true }));
+    socket.emit("run-code", { sessionId, code, language });
+  };
+
+  const handleDeclineExecution = () => {
+    if (executionRequest) {
+      socket.emit("execution-decline", { sessionId, requesterSocketId: executionRequest.requesterSocketId });
+    }
+    setExecutionRequest(null);
+  };
+
+  const handleDownloadCode = () => {
+    const extensions = { javascript: 'js', python: 'py', java: 'java' };
+    const ext = extensions[language] || 'txt';
+    const blob = new Blob([code], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `code.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   const handleEndSession = () => {
@@ -360,8 +459,52 @@ export default function EditorPage() {
   };
 
   const handleLeaveSession = () => {
+    window.__codehive_leaving = true;
     socket.emit("leave-session", sessionId);
     navigate("/");
+  };
+
+  const handleEndClick = () => {
+    setShowEndModal(true);
+  };
+
+  const handleLeaveClick = () => {
+    setShowLeaveConfirm(true);
+  };
+
+  const confirmEndForAll = () => {
+    setShowEndModal(false);
+    handleEndSession();
+  };
+
+  const handleTransferAndLeave = () => {
+    setShowEndModal(false);
+    setTransferTarget('');
+    setShowTransferPicker(true);
+  };
+
+  const confirmTransfer = () => {
+    if (!transferTarget) return;
+    socket.emit("transfer-ownership", { sessionId, targetUserName: transferTarget });
+    setShowTransferPicker(false);
+    window.__codehive_leaving = true;
+    socket.emit("leave-session", sessionId);
+    navigate("/");
+  };
+
+  const confirmLeave = () => {
+    setShowLeaveConfirm(false);
+    handleLeaveSession();
+  };
+
+  const confirmNavigation = () => {
+    const path = pendingNavigation;
+    setPendingNavigation(null);
+    if (userRole === 'owner') {
+      handleEndSession();
+    } else {
+      handleLeaveSession();
+    }
   };
 
   const handleNewMessage = useCallback((message) => {
@@ -468,6 +611,76 @@ export default function EditorPage() {
     <div className="sandbox">
       <StatusChip chips={chips} onClose={removeChip} />
 
+      {/* Execution Request Modal (Owner Only) */}
+      {executionRequest && (
+        <div className="sandbox-overlay" onClick={handleDeclineExecution}>
+          <div className="sandbox-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Execution Request</h3>
+            <p>{executionRequest.requesterName} wants to run the code.</p>
+            <div className="sandbox-modal-footer">
+              <button className="sandbox-btn sandbox-btn--ghost" onClick={handleDeclineExecution}>Decline</button>
+              <button className="sandbox-btn sandbox-btn--danger" onClick={handleApproveExecution}>Approve</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Owner End Session Modal — two options */}
+      {showEndModal && (
+        <div className="sandbox-overlay" onClick={() => setShowEndModal(false)}>
+          <div className="sandbox-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>End Session</h3>
+            <p>What would you like to do?</p>
+            <div className="sandbox-modal-footer">
+              <button className="sandbox-btn sandbox-btn--ghost" onClick={() => setShowEndModal(false)}>Cancel</button>
+              {users.length > 0 && (
+                <button className="sandbox-btn sandbox-btn--ghost" onClick={handleTransferAndLeave}>Transfer & Leave</button>
+              )}
+              <button className="sandbox-btn sandbox-btn--danger" onClick={confirmEndForAll}>End for All</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Transfer Ownership Picker */}
+      {showTransferPicker && (
+        <div className="sandbox-overlay" onClick={() => setShowTransferPicker(false)}>
+          <div className="sandbox-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Transfer Ownership</h3>
+            <p>Select the new owner:</p>
+            <select
+              className="sandbox-lang-btn"
+              value={transferTarget}
+              onChange={(e) => setTransferTarget(e.target.value)}
+              style={{ width: '100%', marginBottom: 12 }}
+            >
+              <option value="">Select a member</option>
+              {users.map((u) => (
+                <option key={u.name} value={u.name}>{u.name}</option>
+              ))}
+            </select>
+            <div className="sandbox-modal-footer">
+              <button className="sandbox-btn sandbox-btn--ghost" onClick={() => setShowTransferPicker(false)}>Cancel</button>
+              <button className="sandbox-btn sandbox-btn--danger" onClick={confirmTransfer} disabled={!transferTarget}>Transfer & Leave</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Leave Confirm Modal (non-owner) */}
+      {showLeaveConfirm && (
+        <div className="sandbox-overlay" onClick={() => setShowLeaveConfirm(false)}>
+          <div className="sandbox-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Leave Session?</h3>
+            <p>Are you sure you want to leave this session?</p>
+            <div className="sandbox-modal-footer">
+              <button className="sandbox-btn sandbox-btn--ghost" onClick={() => setShowLeaveConfirm(false)}>Cancel</button>
+              <button className="sandbox-btn sandbox-btn--danger" onClick={confirmLeave}>Leave</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <ConnectionStatus
         connectionState={connectionState}
         reconnectInfo={reconnectInfo}
@@ -479,6 +692,7 @@ export default function EditorPage() {
       <div className="sandbox-toolbar">
         {/* Session Info */}
         <div className="sandbox-session-info">
+          {sessionTitle && <span className="sandbox-session-title" title={sessionTitle}>{sessionTitle}</span>}
           <span className="sandbox-session-id" title={sessionId}>{sessionId}</span>
           <CopyToClipboard text={sessionId} onCopy={() => handleCopy("copiedSessionId")}>
             <button className={`sandbox-copy-btn ${uiState.copiedSessionId ? 'sandbox-copy-btn--copied' : ''}`} title="Copy Session ID">
@@ -555,7 +769,7 @@ export default function EditorPage() {
                 isLangSelectDropdownOpen: !prev.isLangSelectDropdownOpen,
               }))
             }
-            disabled={userRole === "viewer"}
+            disabled={true}
           >
             {toTitleCase(language)}
             <ChevronDown size={13} />
@@ -579,18 +793,23 @@ export default function EditorPage() {
         <div className="sandbox-toolbar__spacer" />
 
         {/* Actions */}
-        <button className="sandbox-run" onClick={handleRunCode} disabled={isCodeRunning || userRole === "viewer"}>
-          {isCodeRunning ? <Loader2 size={14} className="sandbox-spin" /> : <Play size={14} />}
-          <span>{isCodeRunning ? 'Running' : 'Run'}</span>
+        <button className="sandbox-run" onClick={handleRunCode} disabled={isCodeRunning || userRole === "viewer" || requestingExecution}>
+          {isCodeRunning ? <Loader2 size={14} className="sandbox-spin" /> : requestingExecution ? <Loader2 size={14} className="sandbox-spin" /> : <Play size={14} />}
+          <span>{isCodeRunning ? 'Running' : requestingExecution ? 'Requesting...' : 'Run'}</span>
+        </button>
+
+        <button className="sandbox-run" onClick={handleDownloadCode} title="Download Code">
+          <Download size={14} />
+          <span>Download</span>
         </button>
 
         {userRole === "owner" ? (
-          <button className="sandbox-end" onClick={handleEndSession} disabled={isSessionEnding}>
+          <button className="sandbox-end" onClick={handleEndClick} disabled={isSessionEnding}>
             <X size={14} />
             <span>{isSessionEnding ? 'Ending...' : 'End'}</span>
           </button>
         ) : (
-          <button className="sandbox-end" onClick={handleLeaveSession}>
+          <button className="sandbox-end" onClick={handleLeaveClick}>
             <LogOut size={14} />
             <span>Leave</span>
           </button>

@@ -6,7 +6,7 @@ import useSocket, { ConnectionState } from '../hooks/useSocket';
 import TerminalUI from '../components/TerminalUI';
 import StatusChip from '../components/StatusChip';
 import useStatusChips from '../hooks/useStatusChips';
-import { Play, Loader2, FileCode, ChevronDown, Check, Terminal, X } from 'lucide-react';
+import { Play, Loader2, FileCode, ChevronDown, Check, Terminal, X, Download } from 'lucide-react';
 
 const LANGUAGE_TEMPLATES = {
     javascript: '// Start coding here\nconsole.log("Hello, World!");\n',
@@ -28,6 +28,8 @@ export default function PlaygroundPage() {
     const [isReady, setIsReady] = useState(false);
     const [showLangDropdown, setShowLangDropdown] = useState(false);
     const [showEndConfirm, setShowEndConfirm] = useState(false);
+    const [pendingLanguage, setPendingLanguage] = useState(null);
+    const [pendingNavigation, setPendingNavigation] = useState(null);
     const [isRunning, setIsRunning] = useState(false);
 
     const { chips, addChip, removeChip } = useStatusChips();
@@ -92,6 +94,16 @@ export default function PlaygroundPage() {
         return () => socket.off('execution-complete', handle);
     }, [socket]);
 
+    // beforeunload warning
+    useEffect(() => {
+        const handler = (e) => {
+            e.preventDefault();
+            e.returnValue = '';
+        };
+        window.addEventListener('beforeunload', handler);
+        return () => window.removeEventListener('beforeunload', handler);
+    }, []);
+
     const handleEditorChange = useCallback(
         (value) => {
             setCode(value || '');
@@ -104,8 +116,30 @@ export default function PlaygroundPage() {
 
     const handleLanguageChange = (newLang) => {
         setShowLangDropdown(false);
+        if (code !== LANGUAGE_TEMPLATES[language] && code !== '') {
+            setPendingLanguage(newLang);
+        } else {
+            applyLanguageChange(newLang);
+        }
+    };
+
+    const applyLanguageChange = (newLang) => {
+        setPendingLanguage(null);
         setLanguage(newLang);
         setCode(LANGUAGE_TEMPLATES[newLang]);
+    };
+
+    const handleDownloadCode = () => {
+        const ext = EXTENSIONS[language] || 'txt';
+        const blob = new Blob([code], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `main.${ext}`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
     };
 
     const handleRunCode = () => {
@@ -121,11 +155,56 @@ export default function PlaygroundPage() {
         navigate('/');
     };
 
+    const handleEndClick = () => {
+        setShowEndConfirm(true);
+    };
+
+    const handleNavigateAway = (path) => {
+        setPendingNavigation(path);
+    };
+
+    const confirmNavigation = () => {
+        const path = pendingNavigation;
+        setPendingNavigation(null);
+        if (socket && sessionId) {
+            socket.emit('terminal-shutdown', { sessionId });
+        }
+        navigate(path);
+    };
+
     const terminalNotReady = !isConnected || connectionState === ConnectionState.ERROR;
 
     return (
         <div className="sandbox">
             <StatusChip chips={chips} onClose={removeChip} />
+
+            {/* Language Switch Confirm Modal */}
+            {pendingLanguage && (
+                <div className="sandbox-overlay" onClick={() => setPendingLanguage(null)}>
+                    <div className="sandbox-modal" onClick={(e) => e.stopPropagation()}>
+                        <h3>Switch Language?</h3>
+                        <p>Switching language will reset current code. Continue?</p>
+                        <div className="sandbox-modal-footer">
+                            <button className="sandbox-btn sandbox-btn--ghost" onClick={() => setPendingLanguage(null)}>Cancel</button>
+                            <button className="sandbox-btn sandbox-btn--danger" onClick={() => applyLanguageChange(pendingLanguage)}>Switch</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Navigation Confirm Modal */}
+            {pendingNavigation && (
+                <div className="sandbox-overlay" onClick={() => setPendingNavigation(null)}>
+                    <div className="sandbox-modal" onClick={(e) => e.stopPropagation()}>
+                        <h3>Leave Playground?</h3>
+                        <p>Your code and terminal output will be lost. This cannot be undone.</p>
+                        <div className="sandbox-modal-footer">
+                            <button className="sandbox-btn sandbox-btn--ghost" onClick={() => setPendingNavigation(null)}>Cancel</button>
+                            <button className="sandbox-btn sandbox-btn--danger" onClick={confirmNavigation}>Leave</button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* End Session Confirm Modal */}
             {showEndConfirm && (
@@ -151,7 +230,7 @@ export default function PlaygroundPage() {
                 <div className="sandbox-toolbar__divider" />
 
                 <div className="sandbox-lang-wrapper">
-                    <button className="sandbox-lang-btn" onClick={() => setShowLangDropdown(!showLangDropdown)}>
+                    <button className="sandbox-lang-btn" onClick={() => setShowLangDropdown(!showLangDropdown)} disabled={isRunning}>
                         {toTitleCase(language)}
                         <ChevronDown size={13} />
                     </button>
@@ -178,7 +257,12 @@ export default function PlaygroundPage() {
                     <span>{isRunning ? 'Running' : 'Run'}</span>
                 </button>
 
-                <button className="sandbox-end" onClick={() => setShowEndConfirm(true)}>
+                <button className="sandbox-run" onClick={handleDownloadCode} title="Download Code">
+                    <Download size={14} />
+                    <span>Download</span>
+                </button>
+
+                <button className="sandbox-end" onClick={handleEndClick}>
                     <X size={14} />
                     <span>End</span>
                 </button>

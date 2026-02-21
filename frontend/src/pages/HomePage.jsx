@@ -39,6 +39,8 @@ export default function HomePage() {
 
     const [joinSessionId, setJoinSessionId] = useState('');
     const [joinPassword, setJoinPassword] = useState('');
+    const [selectedLanguage, setSelectedLanguage] = useState('javascript');
+    const [sessionTitle, setSessionTitle] = useState('');
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
 
@@ -69,7 +71,7 @@ export default function HomePage() {
             const sessionId = generateId();
             const sessionPassword = generateId(6);
             const user = auth.currentUser;
-            await createNewSession(sessionId, sessionPassword, user.uid);
+            await createNewSession(sessionId, sessionPassword, user.uid, selectedLanguage, sessionTitle.trim());
             navigate(`/session/${sessionId}`, { state: { sessionPassword } });
         } catch (err) {
             setError(err.message || 'Failed to create room');
@@ -187,6 +189,33 @@ export default function HomePage() {
                     <div className="home-room-actions">
                         <form className="home-room-form" onSubmit={handleCreateSession}>
                             <div className="home-form-label">Create a new room</div>
+                            <input
+                                className="home-input"
+                                type="text"
+                                placeholder="Room title (optional)"
+                                value={sessionTitle}
+                                onChange={(e) => setSessionTitle(e.target.value)}
+                                maxLength={50}
+                            />
+                            <div className="home-feature-chips">
+                                {LANGUAGES.map((lang) => (
+                                    <button
+                                        type="button"
+                                        key={lang.name}
+                                        className="home-chip"
+                                        style={selectedLanguage === lang.name.toLowerCase() ? {
+                                            borderColor: lang.color,
+                                            borderStyle: 'solid',
+                                            color: lang.color,
+                                            background: `${lang.color}10`
+                                        } : { cursor: 'pointer' }}
+                                        onClick={() => setSelectedLanguage(lang.name.toLowerCase())}
+                                    >
+                                        <lang.icon size={14} style={{ color: lang.color }} />
+                                        <span>{lang.name}</span>
+                                    </button>
+                                ))}
+                            </div>
                             <button
                                 className="home-cta home-cta--primary home-cta--full"
                                 type="submit"

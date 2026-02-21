@@ -21,11 +21,11 @@ const {createSession, verifySession, sessionExists} = require('../middleware/Ses
 
   router.post('/create-session', async (req, res, next) => {
     try {
-      const { sessionId, password, owner } = req.body;
+      const { sessionId, password, owner, language, title } = req.body;
       if (await sessionExists(sessionId)) {
         return res.status(400).json({ valid: false, error: 'Session ID exists' });
       }
-      await createSession(sessionId, password, owner);
+      await createSession(sessionId, password, owner, language, title);
       res.json({ valid: true });
     } catch (error) {
       next(error);
