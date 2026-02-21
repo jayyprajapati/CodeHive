@@ -6,7 +6,7 @@ import { signInWithPopup } from 'firebase/auth';
 import { auth, googleProvider } from '../firebase';
 import {
     Terminal, Code2, Play, Users, Zap, Cloud, Lock, Globe,
-    Braces, Hash, Coffee, ArrowRight, Box, Layers
+    Braces, Hash, Coffee, ArrowRight, Box, Layers, FileCode
 } from 'lucide-react';
 
 function generateId(length = 8) {
@@ -105,15 +105,7 @@ export default function HomePage() {
 
     return (
         <div className="home-page">
-            {/* Background decorative icons */}
-            <div className="home-bg-icons" aria-hidden="true">
-                <Terminal className="home-bg-icon home-bg-icon--1" size={120} />
-                <Code2 className="home-bg-icon home-bg-icon--2" size={90} />
-                <Braces className="home-bg-icon home-bg-icon--3" size={100} />
-                <Box className="home-bg-icon home-bg-icon--4" size={80} />
-                <Layers className="home-bg-icon home-bg-icon--5" size={85} />
-                <Code2 className="home-bg-icon home-bg-icon--6" size={95} />
-            </div>
+
 
             {/* Error toast */}
             {error && (
@@ -137,7 +129,7 @@ export default function HomePage() {
             {/* Two sections */}
             <div className="home-sections">
                 {/* Playground */}
-                <div className="home-section">
+                <div className="home-section home-section--play-1">
                     <div className="home-section-header">
                         <Terminal size={24} className="home-section-icon" />
                         <div>
@@ -165,7 +157,7 @@ export default function HomePage() {
                 </div>
 
                 {/* Rooms */}
-                <div className="home-section">
+                <div className="home-section home-section--rooms">
                     <div className="home-section-header">
                         <Users size={24} className="home-section-icon" />
                         <div>
@@ -197,7 +189,7 @@ export default function HomePage() {
                                 onChange={(e) => setSessionTitle(e.target.value)}
                                 maxLength={50}
                             />
-                            <div className="home-feature-chips">
+                            <div className="home-feature-chips lang-selection ">
                                 {LANGUAGES.map((lang) => (
                                     <button
                                         type="button"
@@ -259,10 +251,18 @@ export default function HomePage() {
                         </form>
                     </div>
                 </div>
-            </div>
+                <div className="home-section home-section--play-2">
+                    <div className="home-section-header">
+                        <FileCode size={24} className="home-section-icon" />
+                        <div>
+                            <h2 className="home-section-title">About</h2>
+                            <p className="home-section-subtitle">
+                                Supported Languages
+                            </p>
+                        </div>
+                    </div>
 
-            {/* Language strip — bottom */}
-            <div className="home-lang-strip">
+                    <div className="home-lang-strip">
                 {LANGUAGES.map((lang) => (
                     <div className="home-lang-pill" key={lang.name}>
                         <lang.icon size={16} style={{ color: lang.color }} />
@@ -271,6 +271,11 @@ export default function HomePage() {
                 ))}
                 <span className="home-lang-more">+ more coming</span>
             </div>
+                </div>
+            </div>
+
+            {/* Language strip — bottom */}
+            
         </div>
     );
 }

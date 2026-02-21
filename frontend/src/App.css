@@ -61,7 +61,6 @@ body,
    Header
    ============================================================================ */
 .app-header {
-  height: 48px;
   border-bottom: 1px solid var(--border);
   background: var(--bg);
   position: sticky;
@@ -72,7 +71,7 @@ body,
 .header-container {
   height: 100%;
   max-width: 100%;
-  padding: 0 1rem;
+  padding: 1rem;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -91,7 +90,7 @@ body,
 }
 
 .logo-text {
-  font-size: 1rem;
+  font-size: 1.5rem;
   font-weight: 700;
   letter-spacing: -0.02em;
 }
@@ -303,12 +302,7 @@ body,
 /* Language strip */
 .home-lang-strip {
   display: flex;
-  justify-content: center;
-  align-items: center;
   gap: 10px;
-  margin-top: 2rem;
-  padding-bottom: 2rem;
-  flex-wrap: wrap;
   position: relative;
   z-index: 1;
 }
@@ -343,9 +337,25 @@ body,
   z-index: 1;
   display: grid;
   grid-template-columns: 1fr 1fr;
+  grid-template-areas:
+    "play1 rooms"
+    "play2 rooms";
   gap: 1.5rem;
   max-width: 960px;
   width: 100%;
+  align-items: stretch;
+}
+
+.home-section--play-1 {
+  grid-area: play1;
+}
+
+.home-section--play-2 {
+  grid-area: play2;
+}
+
+.home-section--rooms {
+  grid-area: rooms;
 }
 
 .home-section {
@@ -357,6 +367,7 @@ body,
   flex-direction: column;
   gap: 1rem;
   transition: border-color 0.2s;
+  height: 100%;
 }
 
 .home-section:hover {
@@ -395,6 +406,10 @@ body,
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.lang-selection {
+  margin-block: 8px;
 }
 
 .home-chip {
@@ -554,6 +569,10 @@ body,
 
   .home-sections {
     grid-template-columns: 1fr;
+    grid-template-areas:
+      "play1"
+      "play2"
+      "rooms";
   }
 
   .home-input-row {
