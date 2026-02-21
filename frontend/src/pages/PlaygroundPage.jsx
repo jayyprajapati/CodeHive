@@ -31,6 +31,7 @@ export default function PlaygroundPage() {
     const [pendingLanguage, setPendingLanguage] = useState(null);
     const [pendingNavigation, setPendingNavigation] = useState(null);
     const [isRunning, setIsRunning] = useState(false);
+    const [runBlockMessage, setRunBlockMessage] = useState('');
 
     const { chips, addChip, removeChip } = useStatusChips();
 
@@ -82,9 +83,25 @@ export default function PlaygroundPage() {
     // Connection error chip
     useEffect(() => {
         if (connectionState === ConnectionState.ERROR) {
-            addChip('error', 'Execution server unavailable');
+            const msg = 'Execution service unavailable';
+            addChip('error', msg);
+            setRunBlockMessage(msg);
+            setIsRunning(false);
+        } else if (connectionState === ConnectionState.RECONNECTING) {
+            addChip('warning', 'Reconnecting to execution service...');
+            setRunBlockMessage('Reconnecting to execution service...');
+        } else if (connectionState === ConnectionState.CONNECTED && !socketError) {
+            setRunBlockMessage('');
         }
-    }, [connectionState, addChip]);
+    }, [connectionState, addChip, socketError]);
+
+    useEffect(() => {
+        if (!socketError) return;
+        const msg = socketError.message || 'Execution service error';
+        addChip('error', msg);
+        setRunBlockMessage(msg);
+        setIsRunning(false);
+    }, [socketError, addChip]);
 
     // Execution complete listener
     useEffect(() => {
@@ -143,7 +160,7 @@ export default function PlaygroundPage() {
     };
 
     const handleRunCode = () => {
-        if (!socket || !sessionId) return;
+        if (!socket || !sessionId || runBlockMessage) return;
         setIsRunning(true);
         socket.emit('run-code', { sessionId, code, language });
     };
@@ -173,6 +190,7 @@ export default function PlaygroundPage() {
     };
 
     const terminalNotReady = !isConnected || connectionState === ConnectionState.ERROR;
+    const runDisabled = isRunning || terminalNotReady || !!runBlockMessage || !isReady;
 
     return (
         <div className="sandbox">
@@ -252,10 +270,13 @@ export default function PlaygroundPage() {
 
                 <div className="sandbox-toolbar__spacer" />
 
-                <button className="sandbox-run" onClick={handleRunCode} disabled={isRunning || terminalNotReady}>
+                <button className="sandbox-run" onClick={handleRunCode} disabled={runDisabled}>
                     {isRunning ? <Loader2 size={14} className="sandbox-spin" /> : <Play size={14} />}
                     <span>{isRunning ? 'Running' : 'Run'}</span>
                 </button>
+                {runBlockMessage && (
+                    <span className="sandbox-run-error">{runBlockMessage}</span>
+                )}
 
                 <button className="sandbox-run" onClick={handleDownloadCode} title="Download Code">
                     <Download size={14} />

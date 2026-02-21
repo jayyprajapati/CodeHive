@@ -890,6 +890,12 @@ body,
   letter-spacing: 0.01em;
 }
 
+.sandbox-run-error {
+  color: var(--red);
+  font-size: 0.8rem;
+  margin-left: 12px;
+}
+
 .sandbox-run:hover:not(:disabled) {
   background: #1CAE53;
   box-shadow: 0 0 16px rgba(34, 197, 94, 0.3);
