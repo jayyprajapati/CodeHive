@@ -52,12 +52,17 @@ export default function Header() {
                   <span className="user-name">{currentUser.displayName}</span>
                 </div>
               </div>
-              <Button variant="secondary" size="small" onClick={handleLogout}>
+                <Button
+                  variant="secondary"
+                  size="small"
+                  onClick={handleLogout}
+                  className="header-btn-logout"
+                >
                 Logout
               </Button>
             </>
           ) : (
-            <Button variant="secondary" size="small" onClick={handleLogin}>
+            <Button variant="secondary" size="small" onClick={handleLogin} className="header-btn-login">
               Login
             </Button>
           )}

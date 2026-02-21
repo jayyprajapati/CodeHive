@@ -49,8 +49,9 @@
 html,
 body,
 #root {
-  height: 100%;
-  overflow: hidden;
+  min-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
   background: var(--bg);
   color: var(--text);
   font-family: var(--font);
@@ -63,7 +64,8 @@ body,
 .app-header {
   border-bottom: 1px solid var(--border);
   background: var(--bg);
-  position: sticky;
+  position: fixed;
+  width: 100%;
   top: 0;
   z-index: 100;
 }
@@ -107,6 +109,28 @@ body,
   display: flex;
   align-items: center;
   gap: 1rem;
+}
+
+.header-btn-logout {
+  color: var(--sandbox-red) !important;
+  border-color: var(--sandbox-red) !important;
+}
+
+.header-btn-logout:hover:not(.custom-btn--disabled) {
+  border-color: var(--sandbox-red) !important;
+  color: var(--sandbox-red) !important;
+  opacity: 0.9 !important;
+}
+
+.header-btn-login {
+  color: var(--sandbox-green) !important;
+  border-color: var(--sandbox-green) !important;
+}
+
+.header-btn-login:hover:not(.custom-btn--disabled) {
+  border-color: var(--sandbox-green) !important;
+  color: var(--sandbox-green) !important;
+  opacity: 0.9 !important;
 }
 
 .user-info {
@@ -172,14 +196,12 @@ body,
    Homepage — Premium Landing
    ============================================================================ */
 .home-page {
-  height: calc(100vh - 48px);
-  overflow-y: auto;
-  overflow-x: hidden;
   position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
   padding: 0 2rem 4rem;
+  margin: 5rem 0 0 0;
 }
 
 /* Decorative background icons */
@@ -273,7 +295,7 @@ body,
   z-index: 1;
   text-align: center;
   max-width: 720px;
-  margin-top: 2.5rem;
+  margin-top: 1.5rem;
   margin-bottom: 1.75rem;
 }
 
@@ -399,6 +421,63 @@ body,
   font-size: 0.88rem;
   color: var(--muted);
   line-height: 1.4;
+}
+
+/* ==========================================================================
+   Global Footer
+   ========================================================================= */
+.app-footer {
+  width: 100%;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  padding: 16px 0 24px;
+  color: var(--muted);
+}
+
+.footer-container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.footer-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.copyright-text {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.footer-right {
+  display: flex;
+  align-items: center;
+}
+
+.footer-links {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.footer-link {
+  color: var(--text);
+  font-size: 0.85rem;
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.footer-link:hover {
+  color: var(--blue);
+  border-color: var(--blue);
 }
 
 /* Feature chips */
@@ -674,6 +753,7 @@ body,
   background: var(--sandbox-bg);
   overflow: hidden;
   font-family: var(--sandbox-font);
+  margin-top: 4.35rem;
 }
 
 /* --- Toolbar --- */

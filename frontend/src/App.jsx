@@ -6,6 +6,7 @@ import PlaygroundPage from './pages/PlaygroundPage';
 import EditorPage from './pages/EditorPage';
 import ProtectedRoute from './components/ProtectedRoute';
 import Header from './components/Header';
+import Footer from './components/Footer';
 
 // Backward compat: redirect /editor/:sessionId → /session/:sessionId
 function EditorRedirect() {
@@ -30,6 +31,7 @@ function App() {
         <Route path="/dashboard" element={<Navigate to="/" replace />} />
         <Route path="/editor/:sessionId" element={<EditorRedirect />} />
       </Routes>
+      <Footer />
     </Router>
   )
 }
