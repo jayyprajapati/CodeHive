@@ -7,7 +7,7 @@ import { auth, googleProvider } from '../firebase';
 import {
     Terminal, Code2, Play, Users, Zap, Cloud, Lock, Globe,
     Braces, Hash, Coffee, ArrowRight, Box, Layers, FileCode,
-    Italic
+    Italic, Monitor
 } from 'lucide-react';
 
 function generateId(length = 8) {
@@ -178,6 +178,11 @@ export default function HomePage() {
                         ))}
                     </div>
 
+                    <div className="home-mobile-note">
+                        <Monitor size={22} />
+                        <span>To create or join a room, please use the desktop version.</span>
+                    </div>
+
                     {/* Create / Join forms */}
                     <div className="home-room-actions">
                         <form className="home-room-form" onSubmit={handleCreateSession}>
@@ -214,7 +219,7 @@ export default function HomePage() {
                                 type="submit"
                                 disabled={loading}
                             >
-                                {loading ? 'Creating...' : 'Create Room'}
+                                {loading ? 'Creating...' : currentUser ? 'Create Room' : 'Login & Create Room'}
                                 <ArrowRight size={16} />
                             </button>
                         </form>
@@ -246,7 +251,7 @@ export default function HomePage() {
                                 type="submit"
                                 disabled={loading}
                             >
-                                {loading ? 'Joining...' : 'Join Room'}
+                                {loading ? 'Joining...' : currentUser ? 'Join Room' : 'Login & Join Room'}
                                 <ArrowRight size={16} />
                             </button>
                         </form>

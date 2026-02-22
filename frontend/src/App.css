@@ -631,6 +631,27 @@ body,
   margin-top: 0.25rem;
 }
 
+/* Mobile-only note for rooms */
+.home-mobile-note {
+  display: none;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: transparent;
+  border: none;
+  border-left: 3px solid var(--blue);
+  border-radius: 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+  line-height: 1.5;
+  font-weight: 500;
+}
+
+.home-mobile-note svg {
+  color: var(--blue);
+  flex-shrink: 0;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
   .home-page {
@@ -650,8 +671,13 @@ body,
     grid-template-columns: 1fr;
     grid-template-areas:
       "play1"
-      "play2"
-      "rooms";
+      "rooms"
+      "play2";
+  }
+
+  .home-section {
+    min-width: 0;
+    overflow: hidden;
   }
 
   .home-input-row {
@@ -660,6 +686,14 @@ body,
 
   .home-bg-icons {
     display: none;
+  }
+
+  .home-room-actions {
+    display: none;
+  }
+
+  .home-mobile-note {
+    display: flex;
   }
 }
 
