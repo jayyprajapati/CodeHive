@@ -416,7 +416,15 @@ class ExecutionManager {
       return;
     }
 
-    const payload = typeof data === 'string' ? Buffer.from(data, 'utf8') : data;
+    let normalized = data;
+    if (typeof normalized === 'string') {
+      // Defensive: strip rare Docker attach header leaks that can corrupt stdin.
+      normalized = normalized
+        .replace(/^\s*\{stream:true,stdin:true,stdout:true,stderr:true,hijack:true\}/, '')
+        .replace(/^\s*\{"stream":true,"stdin":true,"stdout":true,"stderr":true,"hijack":true\}/, '');
+    }
+
+    const payload = typeof normalized === 'string' ? Buffer.from(normalized, 'utf8') : normalized;
 
     if (payload.length > limits.MAX_STDIN_BYTES) {
       throw new Error('Input too large');
