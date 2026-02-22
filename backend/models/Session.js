@@ -35,6 +35,7 @@ const sessionSchema = new mongoose.Schema({
 
     Session.collection.createIndex({ sessionId: 1 }, { unique: true });
     Session.collection.createIndex({ "users.socketId": 1 });
+    Session.collection.createIndex({ "users.userId": 1 });
     Session.collection.createIndex({ createdAt: 1 }, { expireAfterSeconds: 86400 });
   
   module.exports = { Session, session, MongoStore };

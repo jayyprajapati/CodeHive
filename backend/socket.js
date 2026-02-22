@@ -39,6 +39,8 @@ const DEFAULT_LANGUAGE = 'javascript';
 const MAX_STDIN_CHARS = 64 * 1024;
 const TERMINAL_CONTROL_ROLES = new Set(['owner', 'editor']);
 const presenceBySession = new Map();
+const DISCONNECT_GRACE_MS = 30_000; // 30s reconnection grace period
+const pendingDisconnects = new Map(); // key: `${sessionId}:${userId}` → timer
 
 // ============================================================================
 // Global Session Counter
@@ -353,12 +355,10 @@ const initSocket = (httpServer) => {
 
         logger.room('user_joining', { sessionId, userName: user, socketId: socket.id });
 
-        // Validate session
+        // Validate session exists
         const sessionValid = await sessionExists(sessionId);
-        const passwordValid = await verifySession(sessionId, password);
-
-        if (!sessionValid || !passwordValid) {
-          logger.warn('join_failed: invalid credentials', { sessionId, userName: user });
+        if (!sessionValid) {
+          logger.warn('join_failed: session_not_found', { sessionId, userName: user });
           return socket.emit('error', {
             message: 'Invalid session or password',
             code: 'AUTH_FAILED'
@@ -367,40 +367,86 @@ const initSocket = (httpServer) => {
 
         const session = await getSession(sessionId);
 
-        // Max 5 members per room
-        if (session && session.users.length >= 5) {
-          logger.warn('join_failed: room_full', { sessionId, userName: user, currentUsers: session.users.length });
-          return socket.emit('error', {
-            message: 'This room is full (max 5 members)',
-            code: 'ROOM_FULL'
-          });
+        // Check if user already exists in session (reconnection / reload)
+        const existingUser = session?.users?.find(u => u.userId === userId);
+        let isReconnect = false;
+
+        if (!existingUser) {
+          // New user — require password
+          const passwordValid = await verifySession(sessionId, password);
+          if (!passwordValid) {
+            logger.warn('join_failed: invalid credentials', { sessionId, userName: user });
+            return socket.emit('error', {
+              message: 'Invalid session or password',
+              code: 'AUTH_FAILED'
+            });
+          }
         }
 
-        // Create user entry
-        const userEntry = {
-          socketId: socket.id,
-          name: user,
-          userId,
-          role: userId === session.owner ? 'owner' : 'editor'
-        };
+        if (existingUser) {
+          isReconnect = true;
 
-        // Add user to session in database
-        await Session.updateOne(
-          { sessionId },
-          { $push: { users: userEntry } }
-        );
+          // Cancel any pending disconnect grace timer
+          const graceKey = `${sessionId}:${userId}`;
+          const graceTimer = pendingDisconnects.get(graceKey);
+          if (graceTimer) {
+            clearTimeout(graceTimer);
+            pendingDisconnects.delete(graceKey);
+            logger.debug('disconnect_grace_cancelled', { sessionId, userId });
+          }
+
+          // Update socketId only — preserve existing role
+          await Session.updateOne(
+            { sessionId, 'users.userId': userId },
+            { $set: { 'users.$.socketId': socket.id } }
+          );
+
+          // Update terminal controller socketId if this user was the controller
+          if (session.terminalController?.userId === userId) {
+            await Session.updateOne(
+              { sessionId },
+              { $set: { 'terminalController.socketId': socket.id } }
+            );
+          }
+
+          logger.room('user_reconnected', { sessionId, userName: user, userId });
+        } else {
+          // New user — enforce room capacity
+          if (session && session.users.length >= 5) {
+            logger.warn('join_failed: room_full', { sessionId, userName: user, currentUsers: session.users.length });
+            return socket.emit('error', {
+              message: 'This room is full (max 5 members)',
+              code: 'ROOM_FULL'
+            });
+          }
+
+          // Create new user entry
+          const userEntry = {
+            socketId: socket.id,
+            name: user,
+            userId,
+            role: userId === session.owner ? 'owner' : 'editor'
+          };
+
+          await Session.updateOne(
+            { sessionId },
+            { $push: { users: userEntry } }
+          );
+        }
 
         // Join socket room
         socket.join(sessionId);
 
         // Get updated session state
         const updatedSession = await getSession(sessionId);
+        const joinedUser = updatedSession.users.find(u => u.userId === userId);
 
         logger.room('user_joined', {
           sessionId,
           userName: user,
-          role: userEntry.role,
-          totalUsers: updatedSession.users.length
+          role: joinedUser?.role,
+          totalUsers: updatedSession.users.length,
+          isReconnect
         });
 
         // Broadcast updated user list to all room members
@@ -408,21 +454,23 @@ const initSocket = (httpServer) => {
           updatedSession.users.map(u => ({ name: u.name, role: u.role }))
         );
 
-        // Notify others about new user
-        socket.broadcast.to(sessionId).emit('user-joined', { user });
+        // Notify others about new user (skip for reconnection)
+        if (!isReconnect) {
+          socket.broadcast.to(sessionId).emit('user-joined', { user });
+        }
 
         // Send session data to joining user
         socket.emit('session-data', {
           code: updatedSession.code,
           chat: updatedSession.chat,
-          role: updatedSession.users.find(u => u.socketId === socket.id)?.role || 'viewer',
+          role: joinedUser?.role || 'viewer',
           language: updatedSession.language || 'javascript',
           ownerId: updatedSession.owner,
           terminalController: updatedSession.terminalController || null,
           title: updatedSession.title || ''
         });
 
-        const presence = updatePresence(sessionId, userEntry);
+        const presence = updatePresence(sessionId, joinedUser || { socketId: socket.id, userId, name: user, role: 'editor' });
         socket.emit('presence-state', {
           sessionId,
           presence: Array.from(getPresenceMap(sessionId).values())
@@ -434,7 +482,9 @@ const initSocket = (httpServer) => {
 
         await executionManager.registerClient(sessionId, terminalHooks(sessionId));
         joinedSessions.add(sessionId);
-        incrementSessionCount();
+        if (!isReconnect) {
+          incrementSessionCount();
+        }
 
         // Listen for execution timeout / OOM events from this session
         const execSession = executionManager.sessions.get(sessionId);
@@ -718,6 +768,14 @@ const initSocket = (httpServer) => {
         presenceBySession.delete(sessionId);
         decrementSessionCount();
 
+        // Cancel all pending disconnect grace timers for this session
+        for (const [key, timer] of pendingDisconnects) {
+          if (key.startsWith(`${sessionId}:`)) {
+            clearTimeout(timer);
+            pendingDisconnects.delete(key);
+          }
+        }
+
         logger.room('session_destroyed', {
           sessionId,
           reason: 'owner_ended',
@@ -771,6 +829,13 @@ const initSocket = (httpServer) => {
           return;
         }
 
+        // Cancel any pending disconnect grace timer
+        const graceKey = `${sessionId}:${user.userId}`;
+        if (pendingDisconnects.has(graceKey)) {
+          clearTimeout(pendingDisconnects.get(graceKey));
+          pendingDisconnects.delete(graceKey);
+        }
+
         if (session.terminalController?.socketId === socket.id) {
           await setTerminalController(sessionId, null, 'controller_left', user);
         }
@@ -783,7 +848,10 @@ const initSocket = (httpServer) => {
           name: user.name
         });
 
-        await removeUserFromSession(sessionId, socket.id);
+        await Session.updateOne(
+          { sessionId },
+          { $pull: { users: { userId: user.userId } } }
+        );
         socket.leave(sessionId);
 
         await executionManager.deregisterClient(sessionId);
@@ -1048,7 +1116,7 @@ const initSocket = (httpServer) => {
           return;
         }
 
-        // --- Collaborative: full role + controller checks ---
+        // --- Collaborative: only session owner can use the terminal ---
         const { session, isMember } = await getSessionWithMembership(sessionId, socket.id);
         if (!session || !isMember) {
           logger.warn('terminal_input_rejected', { sessionId, socketId: socket.id, hasSession: !!session, isMember });
@@ -1066,33 +1134,17 @@ const initSocket = (httpServer) => {
           });
         }
 
-        if (!canControlTerminal(user)) {
-          logger.warn('terminal_input_rejected_role', {
+        // Only the session owner can send terminal input
+        if (user.userId !== session.owner) {
+          logger.warn('terminal_input_rejected_not_owner', {
             sessionId,
             socketId: socket.id,
-            role: user.role
+            userId: user.userId
           });
           return socket.emit('error', {
-            message: 'Your role cannot control the terminal',
+            message: 'Only the session owner can use the terminal',
             code: 'TERMINAL_CONTROL_FORBIDDEN'
           });
-        }
-
-        const controllerSocketId = session.terminalController?.socketId;
-        if (controllerSocketId && controllerSocketId !== socket.id) {
-          logger.warn('terminal_input_rejected_controller', {
-            sessionId,
-            socketId: socket.id,
-            controllerSocketId
-          });
-          return socket.emit('error', {
-            message: 'Another user is controlling the terminal',
-            code: 'TERMINAL_CONTROL_REQUIRED'
-          });
-        }
-
-        if (!controllerSocketId) {
-          await setTerminalController(sessionId, user, 'input_acquired', user);
         }
 
         await ensureTerminal(sessionId);
@@ -1379,53 +1431,93 @@ const initSocket = (httpServer) => {
 
         for (const session of sessions) {
           const user = session.users.find(u => u.socketId === socket.id);
+          if (!user) continue;
 
-          if (user) {
-            if (session.terminalController?.socketId === socket.id) {
-              await setTerminalController(session.sessionId, null, 'controller_disconnected', user);
-            }
-
-            removePresence(session.sessionId, socket.id);
-            io.to(session.sessionId).emit('presence-removed', {
-              sessionId: session.sessionId,
-              socketId: socket.id,
-              userId: user.userId,
-              name: user.name
-            });
-
-            await Session.updateOne(
-              { sessionId: session.sessionId },
-              { $pull: { users: { socketId: socket.id } } }
-            );
-
-            logger.room('user_disconnected', {
-              sessionId: session.sessionId,
-              userName: user.name
-            });
-
-            await executionManager.deregisterClient(session.sessionId);
-            joinedSessions.delete(session.sessionId);
-
-            io.to(session.sessionId).emit('user-left', {
-              user: user.name,
-              message: `${user.name} has disconnected`
-            });
-
-            const updatedSession = await getSession(session.sessionId);
-            if (updatedSession && updatedSession.users.length === 0) {
-              logger.room('session_destroying_empty', {
-                sessionId: session.sessionId
-              });
-              await Session.deleteOne({ sessionId: session.sessionId });
-              await executionManager.shutdown(session.sessionId, 'empty_after_disconnect');
-              logger.room('session_destroyed', {
-                sessionId: session.sessionId,
-                reason: 'empty_after_disconnect'
-              });
-              presenceBySession.delete(session.sessionId);
-              decrementSessionCount();
-            }
+          // Clear terminal controller if this user was controlling
+          if (session.terminalController?.socketId === socket.id) {
+            await setTerminalController(session.sessionId, null, 'controller_disconnected', user);
           }
+
+          // Remove from presence immediately (they're offline)
+          removePresence(session.sessionId, socket.id);
+          io.to(session.sessionId).emit('presence-removed', {
+            sessionId: session.sessionId,
+            socketId: socket.id,
+            userId: user.userId,
+            name: user.name
+          });
+
+          await executionManager.deregisterClient(session.sessionId);
+          joinedSessions.delete(session.sessionId);
+
+          // Start grace period — user may reconnect (page reload, network blip)
+          const graceKey = `${session.sessionId}:${user.userId}`;
+          if (pendingDisconnects.has(graceKey)) {
+            clearTimeout(pendingDisconnects.get(graceKey));
+          }
+
+          logger.debug('disconnect_grace_started', {
+            sessionId: session.sessionId,
+            userId: user.userId,
+            userName: user.name,
+            graceMs: DISCONNECT_GRACE_MS
+          });
+
+          const capturedSessionId = session.sessionId;
+          const capturedUser = { userId: user.userId, name: user.name };
+          const capturedSocketId = socket.id;
+
+          const timer = setTimeout(async () => {
+            pendingDisconnects.delete(graceKey);
+            try {
+              const currentSession = await getSession(capturedSessionId);
+              if (!currentSession) return;
+
+              // Check if user reconnected (socketId would have been updated)
+              const currentUser = currentSession.users.find(u => u.userId === capturedUser.userId);
+              if (!currentUser) return; // Already removed
+              if (currentUser.socketId !== capturedSocketId) return; // Reconnected with new socket
+
+              // Grace period expired — actually remove user
+              await Session.updateOne(
+                { sessionId: capturedSessionId },
+                { $pull: { users: { userId: capturedUser.userId } } }
+              );
+
+              logger.room('user_removed_after_grace', {
+                sessionId: capturedSessionId,
+                userName: capturedUser.name
+              });
+
+              io.to(capturedSessionId).emit('user-left', {
+                user: capturedUser.name,
+                message: `${capturedUser.name} has disconnected`
+              });
+
+              const updatedSession = await getSession(capturedSessionId);
+              if (updatedSession) {
+                io.to(capturedSessionId).emit('user-list',
+                  updatedSession.users.map(u => ({ name: u.name, role: u.role }))
+                );
+              }
+
+              if (updatedSession && updatedSession.users.length === 0) {
+                logger.room('session_destroying_empty', { sessionId: capturedSessionId });
+                await Session.deleteOne({ sessionId: capturedSessionId });
+                await executionManager.shutdown(capturedSessionId, 'empty_after_disconnect');
+                logger.room('session_destroyed', { sessionId: capturedSessionId, reason: 'empty_after_disconnect' });
+                presenceBySession.delete(capturedSessionId);
+                decrementSessionCount();
+              }
+            } catch (err) {
+              logger.error('disconnect_grace_cleanup_failed', err, {
+                sessionId: capturedSessionId,
+                userId: capturedUser.userId
+              });
+            }
+          }, DISCONNECT_GRACE_MS);
+
+          pendingDisconnects.set(graceKey, timer);
         }
 
       } catch (error) {

@@ -89,7 +89,14 @@ export default function EditorPage() {
 
   const { code, language, users, userRole, chatMessages, terminalController, ownerId, sessionTitle } = sessionState;
   const { isCodeRunning, isSessionEnding, requestingExecution } = loading;
-  const sessionPassword = location.state?.sessionPassword;
+  const sessionPassword = location.state?.sessionPassword || sessionStorage.getItem(`codehive_pass_${sessionId}`);
+
+  // Persist password for reconnection after page reload
+  useEffect(() => {
+    if (sessionPassword) {
+      sessionStorage.setItem(`codehive_pass_${sessionId}`, sessionPassword);
+    }
+  }, [sessionId, sessionPassword]);
 
   const getFileName = useCallback((lang) => {
     if (lang === "python") return "Code.py";
@@ -455,11 +462,13 @@ export default function EditorPage() {
 
   const handleEndSession = () => {
     setLoading((prev) => ({ ...prev, isSessionEnding: true }));
+    sessionStorage.removeItem(`codehive_pass_${sessionId}`);
     socket.emit("end-session", { sessionId, userId: currentUser.uid });
   };
 
   const handleLeaveSession = () => {
     window.__codehive_leaving = true;
+    sessionStorage.removeItem(`codehive_pass_${sessionId}`);
     socket.emit("leave-session", sessionId);
     navigate("/");
   };
@@ -586,6 +595,12 @@ export default function EditorPage() {
     );
   }, [presenceState, currentUser, getPresenceColorIndex]);
 
+  const ownerName = useMemo(() => {
+    if (ownerId === currentUser?.uid) return currentUser.displayName;
+    const ownerUser = users.find(u => u.role === 'owner');
+    return ownerUser?.name || 'Unknown';
+  }, [ownerId, currentUser, users]);
+
   const presenceList = useMemo(() => {
     const list = Object.values(presenceState);
     const hasSelf = list.some((item) => item.userId === currentUser?.uid || item.name === currentUser?.displayName);
@@ -704,6 +719,21 @@ export default function EditorPage() {
               {uiState.copiedPass ? <Check size={13} /> : <Key size={13} />}
             </button>
           </CopyToClipboard>
+          {presenceList.length > 0 && (
+            <div className="sandbox-presence-inline" aria-label="Active members">
+              {presenceList.map((presence) => {
+                const colorIndex = getPresenceColorIndex(presence.socketId || presence.userId || presence.name);
+                return (
+                  <span
+                    key={presence.socketId || presence.userId || presence.name}
+                    className={`sandbox-presence-pill sandbox-presence-pill--inline presence-color-${colorIndex}`}
+                  >
+                    {presence.name}
+                  </span>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         <div className="sandbox-toolbar__divider" />
@@ -798,7 +828,7 @@ export default function EditorPage() {
           <span>{isCodeRunning ? 'Running' : requestingExecution ? 'Requesting...' : 'Run'}</span>
         </button>
 
-        <button className="sandbox-run" onClick={handleDownloadCode} title="Download Code">
+        <button className="sandbox-run sandbox-run--secondary" onClick={handleDownloadCode} title="Download Code">
           <Download size={14} />
           <span>Download</span>
         </button>
@@ -815,25 +845,6 @@ export default function EditorPage() {
           </button>
         )}
       </div>
-
-      {/* Presence Strip */}
-      {presenceList.length > 0 && (
-        <div className="sandbox-presence">
-          {presenceList.map((presence) => {
-            const presenceFile = presence.file || "Unknown";
-            const colorIndex = getPresenceColorIndex(presence.socketId || presence.userId || presence.name);
-            return (
-              <span
-                key={presence.socketId || presence.userId || presence.name}
-                className={`sandbox-presence-pill presence-color-${colorIndex}`}
-              >
-                {presence.name}
-                <span className="sandbox-presence-file">({presenceFile})</span>
-              </span>
-            );
-          })}
-        </div>
-      )}
 
       {/* Permission Notice */}
       {permissionNotice && (
@@ -928,6 +939,7 @@ export default function EditorPage() {
                   userRole={userRole}
                   users={users}
                   terminalController={terminalController}
+                  ownerName={ownerName}
                 />
               </div>
             )}

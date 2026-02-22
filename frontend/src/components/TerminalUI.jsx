@@ -18,7 +18,8 @@ export default function TerminalUI({
   userRole,
   users,
   terminalController,
-  sessionType = 'collaborative'
+  sessionType = 'collaborative',
+  ownerName: ownerNameProp
 }) {
   const terminalRef = useRef(null);
   const termRef = useRef(null);
@@ -39,8 +40,9 @@ export default function TerminalUI({
   const isController = isPlayground || (terminalController?.userId
     ? terminalController.userId === currentUser?.uid
     : terminalController?.name === currentUser?.displayName);
-  const isInputEnabled = isPlayground || (canControl && (!terminalController || isController));
+  const isInputEnabled = isPlayground || userRole === 'owner';
   const isOwner = isPlayground || userRole === 'owner';
+  const ownerName = ownerNameProp || (isPlayground ? 'You' : 'Unknown');
 
   const eligibleUsers = useMemo(
     () => (isPlayground ? [] : users.filter((user) => user.role !== 'viewer')),
@@ -246,12 +248,12 @@ export default function TerminalUI({
       {!isPlayground && (
         <div className="terminal-control-bar">
           <div className="terminal-control-status">
-            <span className="terminal-control-label">Controller:</span>
-            <span className={`terminal-control-name ${isController ? 'is-controller' : ''}`}>
-              {controllerName}
+            <span className="terminal-control-label">Owner:</span>
+            <span className={`terminal-control-name ${isOwner ? 'is-controller' : ''}`}>
+              {ownerName}
             </span>
             {!isInputEnabled && (
-              <span className="terminal-control-note">Input disabled</span>
+              <span className="terminal-control-note">Terminal read-only</span>
             )}
           </div>
           {isOwner && eligibleUsers.length > 0 && (
@@ -283,7 +285,7 @@ export default function TerminalUI({
               onClick={handleRequestControl}
               disabled={!!terminalController}
             >
-              Request control
+              Request Execution
             </button>
           )}
         </div>
@@ -314,11 +316,13 @@ TerminalUI.propTypes = {
     userId: PropTypes.string,
     socketId: PropTypes.string
   }),
-  sessionType: PropTypes.oneOf(['playground', 'collaborative'])
+  sessionType: PropTypes.oneOf(['playground', 'collaborative']),
+  ownerName: PropTypes.string
 };
 
 TerminalUI.defaultProps = {
   sessionType: 'collaborative',
   users: [],
-  userRole: 'editor'
+  userRole: 'editor',
+  ownerName: ''
 };

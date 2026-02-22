@@ -278,7 +278,7 @@ export default function PlaygroundPage() {
                     <span className="sandbox-run-error">{runBlockMessage}</span>
                 )}
 
-                <button className="sandbox-run" onClick={handleDownloadCode} title="Download Code">
+                <button className="sandbox-run sandbox-run--secondary" onClick={handleDownloadCode} title="Download Code">
                     <Download size={14} />
                     <span>Download</span>
                 </button>
