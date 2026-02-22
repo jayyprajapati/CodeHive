@@ -6,7 +6,8 @@ import { signInWithPopup } from 'firebase/auth';
 import { auth, googleProvider } from '../firebase';
 import {
     Terminal, Code2, Play, Users, Zap, Cloud, Lock, Globe,
-    Braces, Hash, Coffee, ArrowRight, Box, Layers, FileCode
+    Braces, Hash, Coffee, ArrowRight, Box, Layers, FileCode,
+    Italic
 } from 'lucide-react';
 
 function generateId(length = 8) {
@@ -122,7 +123,7 @@ export default function HomePage() {
                 </h1>
                 <p className="home-hero-subtitle">
                     Skip the local setup. Code in any language, execute instantly, and
-                    pair-program in real-time — all from your browser.
+                    pair-program in real-time. <strong>All from your browser.</strong>
                 </p>
             </div>
 
@@ -135,7 +136,7 @@ export default function HomePage() {
                         <div>
                             <h2 className="home-section-title">Playground</h2>
                             <p className="home-section-subtitle">
-                                Instant code scratchpad — no account required.
+                                Instant code scratchpad. No account required.
                             </p>
                         </div>
                     </div>
