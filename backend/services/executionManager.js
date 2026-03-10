@@ -29,25 +29,30 @@ class ExecutionManager {
   // Container bootstrap
   // --------------------------------------------------------------------------
 
-  async ensureImage() {
-    if (this.imageReady) return;
+  async ensureImage(image) {
+    const targetImage = image || limits.EXECUTION_IMAGE;
+
+    // Check if image already verified
+    if (this._verifiedImages && this._verifiedImages.has(targetImage)) return;
 
     try {
-      await this.docker.getImage(limits.EXECUTION_IMAGE).inspect();
-      this.imageReady = true;
-      logger.debug('execution_image_ready', { image: limits.EXECUTION_IMAGE });
+      await this.docker.getImage(targetImage).inspect();
+      if (!this._verifiedImages) this._verifiedImages = new Set();
+      this._verifiedImages.add(targetImage);
+      logger.debug('execution_image_ready', { image: targetImage });
       return;
     } catch (err) {
-      logger.warn('execution_image_missing_pulling', { image: limits.EXECUTION_IMAGE });
+      logger.warn('execution_image_missing_pulling', { image: targetImage });
     }
 
     await new Promise((resolve, reject) => {
-      this.docker.pull(limits.EXECUTION_IMAGE, (pullErr, pullStream) => {
+      this.docker.pull(targetImage, (pullErr, pullStream) => {
         if (pullErr) return reject(pullErr);
         this.docker.modem.followProgress(pullStream, (progressErr) => {
           if (progressErr) return reject(progressErr);
-          this.imageReady = true;
-          logger.debug('execution_image_pulled', { image: limits.EXECUTION_IMAGE });
+          if (!this._verifiedImages) this._verifiedImages = new Set();
+          this._verifiedImages.add(targetImage);
+          logger.debug('execution_image_pulled', { image: targetImage });
           resolve();
         });
       });
@@ -58,7 +63,7 @@ class ExecutionManager {
   // Session creation with resource enforcement
   // --------------------------------------------------------------------------
 
-  async ensureSession(sessionId, hooks = {}) {
+  async ensureSession(sessionId, hooks = {}, options = {}) {
     let session = this.sessions.get(sessionId);
     if (session) {
       logger.debug('execution_session_reused', { sessionId });
@@ -75,18 +80,33 @@ class ExecutionManager {
       throw new Error('CONTAINER_LIMIT_REACHED');
     }
 
-    await this.ensureImage();
+    const containerImage = options.image || limits.EXECUTION_IMAGE;
+    await this.ensureImage(containerImage);
 
     logger.debug('execution_container_creating', {
       sessionId,
-      image: limits.EXECUTION_IMAGE
+      image: containerImage
     });
 
+    // Determine WorkingDir — codehive-python uses /workspace, others use /home/codeuser/workspace
+    const isCustomImage = containerImage !== limits.EXECUTION_IMAGE;
+    const workingDir = isCustomImage ? '/workspace' : '/home/codeuser/workspace';
+    const tmpfsConfig = isCustomImage
+      ? {
+        '/workspace': 'rw,exec,size=134217728',
+        '/tmp': 'rw,size=67108864'
+      }
+      : {
+        '/home/codeuser/workspace': 'rw,exec,size=134217728,uid=1000,gid=1000',
+        '/tmp': 'rw,size=67108864,uid=1000,gid=1000'
+      };
+    const containerUser = isCustomImage ? '' : 'codeuser';
+
     const container = await this.docker.createContainer({
-      Image: limits.EXECUTION_IMAGE,
+      Image: containerImage,
       Cmd: ['/bin/sh'],
-      User: 'codeuser',
-      WorkingDir: '/home/codeuser/workspace',
+      ...(containerUser ? { User: containerUser } : {}),
+      WorkingDir: workingDir,
       Tty: true,
       OpenStdin: true,
       StdinOnce: false,
@@ -105,10 +125,7 @@ class ExecutionManager {
         ReadonlyRootfs: true,
         CapDrop: ['ALL'],
         SecurityOpt: ['no-new-privileges'],
-        Tmpfs: {
-          '/home/codeuser/workspace': 'rw,exec,size=134217728,uid=1000,gid=1000',
-          '/tmp': 'rw,size=67108864,uid=1000,gid=1000'
-        }
+        Tmpfs: tmpfsConfig
       }
     });
 
@@ -401,6 +418,36 @@ class ExecutionManager {
       clearTimeout(session.executionGraceTimer);
       session.executionGraceTimer = null;
     }
+  }
+
+  // --------------------------------------------------------------------------
+  // Container exec — for workspace file operations
+  // --------------------------------------------------------------------------
+
+  async execInContainer(sessionId, cmd) {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.destroyed) {
+      throw new Error('No active session');
+    }
+
+    const exec = await session.container.exec({
+      Cmd: ['/bin/sh', '-c', cmd],
+      AttachStdout: true,
+      AttachStderr: true
+    });
+
+    return new Promise((resolve, reject) => {
+      exec.start({ hijack: true, stdin: false }, (err, stream) => {
+        if (err) return reject(err);
+
+        let output = '';
+        stream.on('data', (chunk) => {
+          output += chunk.toString('utf8');
+        });
+        stream.on('end', () => resolve(output));
+        stream.on('error', reject);
+      });
+    });
   }
 
   // --------------------------------------------------------------------------

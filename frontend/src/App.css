@@ -2101,3 +2101,94 @@ body,
 .alert-close:hover {
   color: var(--text);
 }
+
+/* ============================================================================
+   Python Package Dropdown
+   ============================================================================ */
+.sandbox-packages-wrapper {
+  flex-shrink: 0;
+  border-top: 1px solid var(--sandbox-border);
+  background: var(--sandbox-surface);
+}
+
+.sandbox-packages-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 14px;
+  background: none;
+  border: none;
+  color: var(--sandbox-text-secondary);
+  font-family: var(--sandbox-font);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.sandbox-packages-toggle:hover {
+  color: var(--sandbox-text);
+}
+
+.sandbox-packages-chevron--open {
+  transform: rotate(180deg);
+}
+
+.sandbox-packages-notice {
+  display: block;
+  padding: 4px 14px;
+  font-size: 0.7rem;
+  color: var(--sandbox-amber);
+  font-family: var(--sandbox-font);
+}
+
+.sandbox-packages-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 14px 8px;
+  max-height: 160px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--sandbox-border) transparent;
+}
+
+.sandbox-packages-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.sandbox-packages-list::-webkit-scrollbar-thumb {
+  background: var(--sandbox-border);
+  border-radius: 2px;
+}
+
+.sandbox-package-item {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 3px 8px;
+  background: var(--sandbox-surface-2);
+  border: 1px solid var(--sandbox-border);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: var(--sandbox-font);
+}
+
+.sandbox-package-item:hover {
+  border-color: var(--sandbox-accent);
+  background: var(--sandbox-accent-dim);
+}
+
+.sandbox-package-name {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--sandbox-text);
+}
+
+.sandbox-package-version {
+  font-size: 0.6rem;
+  color: var(--sandbox-text-muted);
+  font-family: var(--sandbox-mono);
+}

@@ -12,7 +12,8 @@ import TerminalUI from "../components/TerminalUI";
 import ConnectionStatus from "../components/ConnectionStatus";
 import StatusChip from "../components/StatusChip";
 import { CopyToClipboard } from "react-copy-to-clipboard";
-import { Check, Copy, Key, MoreVertical, Play, Loader2, FileCode, ChevronDown, Terminal as TerminalIcon, MessageSquare, X, LogOut, Download } from 'lucide-react';
+import { PYTHON_PACKAGES, isPackageImported } from '../utils/pythonPackages';
+import { Check, Copy, Key, MoreVertical, Play, Loader2, FileCode, ChevronDown, Terminal as TerminalIcon, MessageSquare, X, LogOut, Download, Package } from 'lucide-react';
 
 const LANGUAGE_TEMPLATES = {
   python: "# New Python Session Started\n\n",
@@ -86,6 +87,8 @@ export default function EditorPage() {
   const [showTransferPicker, setShowTransferPicker] = useState(false);
   const [transferTarget, setTransferTarget] = useState('');
   const [pendingNavigation, setPendingNavigation] = useState(null);
+  const [showPackages, setShowPackages] = useState(false);
+  const [importNotice, setImportNotice] = useState('');
 
   const { code, language, users, userRole, chatMessages, terminalController, ownerId, sessionTitle } = sessionState;
   const { isCodeRunning, isSessionEnding, requestingExecution } = loading;
@@ -459,6 +462,45 @@ export default function EditorPage() {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
+
+  const handlePackageClick = (pkgName) => {
+    const pkg = PYTHON_PACKAGES[pkgName];
+    if (!pkg) return;
+
+    if (isPackageImported(code, pkgName)) {
+      setImportNotice('Package already imported.');
+      return;
+    }
+
+    const importLine = pkg.importStatement + '\n';
+    const editor = editorRef.current;
+
+    if (editor) {
+      const model = editor.getModel();
+      if (model) {
+        const range = { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 };
+        editor.executeEdits('package-import', [{ range, text: importLine }]);
+        const newCode = model.getValue();
+        setSessionState((prev) => ({ ...prev, code: newCode }));
+        if (socket?.connected) {
+          socket.emit('code-change', { sessionId, code: newCode });
+        }
+        return;
+      }
+    }
+
+    const newCode = importLine + code;
+    setSessionState((prev) => ({ ...prev, code: newCode }));
+    if (socket?.connected) {
+      socket.emit('code-change', { sessionId, code: newCode });
+    }
+  };
+
+  useEffect(() => {
+    if (!importNotice) return;
+    const t = setTimeout(() => setImportNotice(''), 2500);
+    return () => clearTimeout(t);
+  }, [importNotice]);
 
   const handleEndSession = () => {
     setLoading((prev) => ({ ...prev, isSessionEnding: true }));
@@ -964,6 +1006,35 @@ export default function EditorPage() {
           </div>
         </div>
       </Split>
+
+      {/* Python Package Dropdown */}
+      {language === 'python' && (
+        <div className="sandbox-packages-wrapper">
+          <button className="sandbox-packages-toggle" onClick={() => setShowPackages(!showPackages)}>
+            <Package size={13} />
+            <span>Available Packages</span>
+            <ChevronDown size={13} className={showPackages ? 'sandbox-packages-chevron--open' : ''} />
+          </button>
+          {importNotice && (
+            <span className="sandbox-packages-notice">{importNotice}</span>
+          )}
+          {showPackages && (
+            <div className="sandbox-packages-list">
+              {Object.entries(PYTHON_PACKAGES).map(([name, pkg]) => (
+                <button
+                  key={name}
+                  className="sandbox-package-item"
+                  onClick={() => handlePackageClick(name)}
+                  title={`Insert: ${pkg.importStatement}`}
+                >
+                  <span className="sandbox-package-name">{name}</span>
+                  <span className="sandbox-package-version">v{pkg.version}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Status Bar */}
       <div className="sandbox-statusbar">

@@ -295,7 +295,17 @@ export default function TerminalUI({
           {controlNotice}
         </div>
       )}
-      <div ref={terminalRef} style={{ width: '100%' }} className='terminal-ui' />
+      <div
+        ref={terminalRef}
+        style={{ width: '100%' }}
+        className='terminal-ui'
+        onKeyDown={(e) => {
+          // Prevent browser from intercepting space/tab when terminal is focused
+          if (e.key === ' ' || e.key === 'Tab') {
+            e.stopPropagation();
+          }
+        }}
+      />
     </div>
   );
 }
