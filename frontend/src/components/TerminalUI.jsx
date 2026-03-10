@@ -88,6 +88,24 @@ export default function TerminalUI({
     termRef.current = term;
     fitAddonRef.current = fitAddon;
 
+    // Ensure space and tab keys are always processed by xterm, not intercepted by browser
+    term.attachCustomKeyEventHandler((event) => {
+      if (event.key === ' ' || event.key === 'Tab') {
+        event.preventDefault();
+        return true; // let xterm process it
+      }
+      return true;
+    });
+
+    // Also prevent the browser from scrolling on space at the DOM level
+    const termContainer = terminalRef.current;
+    const preventSpaceScroll = (e) => {
+      if (e.key === ' ' || e.key === 'Tab') {
+        e.stopPropagation();
+      }
+    };
+    termContainer.addEventListener('keydown', preventSpaceScroll, true);
+
     // Emit initial size
     const emitResize = () => {
       try {
@@ -138,7 +156,8 @@ export default function TerminalUI({
     const outputHandler = (data) => {
       if (!data || data.sessionId !== sessionId) return;
       const filtered = filterOutput(data.output);
-      if (filtered.trim() || filtered.includes('\n')) {
+      // Keep whitespace-only chunks (for example: echoed spaces while typing).
+      if (filtered.length > 0) {
         term.write(filtered.replace(/\n/g, '\r\n'));
       }
     };
@@ -196,6 +215,9 @@ export default function TerminalUI({
       socket.off('error', handleSocketError);
       dataDisposable.dispose();
       window.removeEventListener('resize', handleWindowResize);
+      if (termContainer) {
+        termContainer.removeEventListener('keydown', preventSpaceScroll, true);
+      }
       if (resizeTimeout.current) clearTimeout(resizeTimeout.current);
       if (termRef.current) {
         termRef.current.dispose();
