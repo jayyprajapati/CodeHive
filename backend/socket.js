@@ -31,7 +31,11 @@ const crypto = require('crypto');
 
 const SUPPORTED_LANGUAGES = {
   javascript: { file: 'main.js', run: 'node main.js', image: 'node:20-alpine' },
-  python: { file: 'main.py', run: 'python main.py', image: 'codehive-python' },
+  python: {
+    file: 'main.py',
+    run: 'python main.py',
+    image: process.env.PYTHON_EXECUTION_IMAGE || 'codehive-python:latest'
+  },
   java: { file: 'Code.java', run: 'javac Code.java && java Code', image: 'amazoncorretto:17-alpine' }
 };
 
@@ -482,6 +486,9 @@ const initSocket = (httpServer) => {
           presence
         });
 
+        const sessionLanguage = updatedSession.language || DEFAULT_LANGUAGE;
+        const sessionLangConfig = SUPPORTED_LANGUAGES[sessionLanguage] || SUPPORTED_LANGUAGES[DEFAULT_LANGUAGE];
+        await ensureTerminal(sessionId, sessionLangConfig.image);
         await executionManager.registerClient(sessionId, terminalHooks(sessionId));
         joinedSessions.add(sessionId);
         if (!isReconnect) {

@@ -31,4 +31,15 @@ This backend now runs a persistent, per-room shell inside a Docker sandbox and s
 ## Operational Notes
 - Key server code lives in [services/executionManager.js](services/executionManager.js) and [socket.js](socket.js).
 - Tune limits via env vars: `EXECUTION_IMAGE`, `EXECUTION_NANO_CPUS`, `EXECUTION_MEMORY_BYTES`, `EXECUTION_PIDS_LIMIT`, `EXECUTION_IDLE_TIMEOUT_MS`, `EXECUTION_MAX_LIFETIME_MS`, `EXECUTION_FORCE_KILL_TIMEOUT_MS`, `EXECUTION_MAX_STDIN_BYTES`.
+- Python execution image default: `codehive-python:latest` (override with `PYTHON_EXECUTION_IMAGE`, for example `codehive-python:v1`).
+- Rebuild and refresh the Python image on the server when Dockerfile/package changes are made:
+
+```bash
+cd backend/execution-images/python
+docker build -t codehive-python:latest .
+docker stop $(docker ps -aq --filter "ancestor=codehive-python") || true
+docker rm $(docker ps -aq --filter "ancestor=codehive-python") || true
+docker image prune -f
+```
+
 - `terminal-output` is streaming; do not buffer on the client side if you need real-time behavior.
