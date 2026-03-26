@@ -31,7 +31,11 @@ const crypto = require('crypto');
 
 const SUPPORTED_LANGUAGES = {
   javascript: { file: 'main.js', run: 'node main.js', image: 'node:20-alpine' },
-  python: { file: 'main.py', run: 'python main.py', image: 'python:3.12-alpine' },
+  python: {
+    file: 'main.py',
+    run: 'python main.py',
+    image: process.env.PYTHON_EXECUTION_IMAGE || 'codehive-python:latest'
+  },
   java: { file: 'Code.java', run: 'javac Code.java && java Code', image: 'amazoncorretto:17-alpine' }
 };
 
@@ -169,9 +173,10 @@ const initSocket = (httpServer) => {
       }
     });
 
-    const ensureTerminal = async (sessionId) => {
+    const ensureTerminal = async (sessionId, image) => {
       try {
-        await executionManager.ensureSession(sessionId, terminalHooks(sessionId));
+        const options = image ? { image } : {};
+        await executionManager.ensureSession(sessionId, terminalHooks(sessionId), options);
       } catch (err) {
         if (err.message === 'CONTAINER_LIMIT_REACHED') {
           logger.safety('container_spawn_failed', { sessionId, reason: 'container_limit' });
@@ -291,8 +296,9 @@ const initSocket = (httpServer) => {
         socket.join(sessionId);
         joinedPlaygrounds.add(sessionId);
 
-        // Initialize container
-        await ensureTerminal(sessionId);
+        // Initialize container with the language-specific image
+        const langConfig = SUPPORTED_LANGUAGES[language] || SUPPORTED_LANGUAGES[DEFAULT_LANGUAGE];
+        await ensureTerminal(sessionId, langConfig.image);
         await executionManager.registerClient(sessionId, terminalHooks(sessionId));
 
         // Listen for execution timeout events from this session
@@ -480,6 +486,9 @@ const initSocket = (httpServer) => {
           presence
         });
 
+        const sessionLanguage = updatedSession.language || DEFAULT_LANGUAGE;
+        const sessionLangConfig = SUPPORTED_LANGUAGES[sessionLanguage] || SUPPORTED_LANGUAGES[DEFAULT_LANGUAGE];
+        await ensureTerminal(sessionId, sessionLangConfig.image);
         await executionManager.registerClient(sessionId, terminalHooks(sessionId));
         joinedSessions.add(sessionId);
         if (!isReconnect) {
@@ -1219,6 +1228,98 @@ const initSocket = (httpServer) => {
     });
 
     // ========================================================================
+    // Workspace File Operations (Both Modes)
+    // ========================================================================
+
+    const sanitizeWorkspacePath = (filename) => {
+      // Prevent directory traversal
+      const cleaned = filename.replace(/\.\./g, '').replace(/^\/+/, '');
+      return `/workspace/${cleaned}`;
+    };
+
+    socket.on('workspace-create-file', async (data = {}) => {
+      try {
+        const { sessionId, filename } = data;
+        if (!sessionId || !filename) return;
+        const safePath = sanitizeWorkspacePath(filename);
+        await executionManager.execInContainer(sessionId, `touch "${safePath}"`);
+        socket.emit('workspace-operation-result', { success: true, operation: 'createFile', filename });
+      } catch (error) {
+        logger.error('workspace-create-file failed', error, { sessionId: data?.sessionId });
+        socket.emit('workspace-operation-result', { success: false, operation: 'createFile', error: error.message });
+      }
+    });
+
+    socket.on('workspace-create-folder', async (data = {}) => {
+      try {
+        const { sessionId, folder } = data;
+        if (!sessionId || !folder) return;
+        const safePath = sanitizeWorkspacePath(folder);
+        await executionManager.execInContainer(sessionId, `mkdir -p "${safePath}"`);
+        socket.emit('workspace-operation-result', { success: true, operation: 'createFolder', folder });
+      } catch (error) {
+        logger.error('workspace-create-folder failed', error, { sessionId: data?.sessionId });
+        socket.emit('workspace-operation-result', { success: false, operation: 'createFolder', error: error.message });
+      }
+    });
+
+    socket.on('workspace-delete-file', async (data = {}) => {
+      try {
+        const { sessionId, filename } = data;
+        if (!sessionId || !filename) return;
+        const safePath = sanitizeWorkspacePath(filename);
+        await executionManager.execInContainer(sessionId, `rm -f "${safePath}"`);
+        socket.emit('workspace-operation-result', { success: true, operation: 'deleteFile', filename });
+      } catch (error) {
+        logger.error('workspace-delete-file failed', error, { sessionId: data?.sessionId });
+        socket.emit('workspace-operation-result', { success: false, operation: 'deleteFile', error: error.message });
+      }
+    });
+
+    socket.on('workspace-rename-file', async (data = {}) => {
+      try {
+        const { sessionId, oldName, newName } = data;
+        if (!sessionId || !oldName || !newName) return;
+        const safeOld = sanitizeWorkspacePath(oldName);
+        const safeNew = sanitizeWorkspacePath(newName);
+        await executionManager.execInContainer(sessionId, `mv "${safeOld}" "${safeNew}"`);
+        socket.emit('workspace-operation-result', { success: true, operation: 'renameFile', oldName, newName });
+      } catch (error) {
+        logger.error('workspace-rename-file failed', error, { sessionId: data?.sessionId });
+        socket.emit('workspace-operation-result', { success: false, operation: 'renameFile', error: error.message });
+      }
+    });
+
+    socket.on('workspace-read-file', async (data = {}) => {
+      try {
+        const { sessionId, filename } = data;
+        if (!sessionId || !filename) return;
+        const safePath = sanitizeWorkspacePath(filename);
+        const content = await executionManager.execInContainer(sessionId, `cat "${safePath}"`);
+        socket.emit('workspace-file-content', { success: true, filename, content });
+      } catch (error) {
+        logger.error('workspace-read-file failed', error, { sessionId: data?.sessionId });
+        socket.emit('workspace-file-content', { success: false, filename: data?.filename, error: error.message });
+      }
+    });
+
+    socket.on('workspace-write-file', async (data = {}) => {
+      try {
+        const { sessionId, filename, content } = data;
+        if (!sessionId || !filename) return;
+        const safePath = sanitizeWorkspacePath(filename);
+        // Use heredoc to safely write content with special characters
+        const delimiter = `HEREDOC_${Date.now()}`;
+        const cmd = `cat > "${safePath}" << '${delimiter}'\n${content || ''}\n${delimiter}`;
+        await executionManager.execInContainer(sessionId, cmd);
+        socket.emit('workspace-operation-result', { success: true, operation: 'writeFile', filename });
+      } catch (error) {
+        logger.error('workspace-write-file failed', error, { sessionId: data?.sessionId });
+        socket.emit('workspace-operation-result', { success: false, operation: 'writeFile', error: error.message });
+      }
+    });
+
+    // ========================================================================
     // Run Code (Both Modes)
     // ========================================================================
 
@@ -1256,7 +1357,7 @@ const initSocket = (httpServer) => {
             });
           }
 
-          await ensureTerminal(sessionId);
+          await ensureTerminal(sessionId, langConfig.image);
 
           // Start execution timer — will SIGINT then SIGKILL on timeout
           const execTimer = executionManager.startExecutionTimer(sessionId);
@@ -1341,7 +1442,7 @@ const initSocket = (httpServer) => {
           });
         }
 
-        await ensureTerminal(sessionId);
+        await ensureTerminal(sessionId, langConfig.image);
 
         // Start execution timer — will SIGINT then SIGKILL on timeout
         const execTimer = executionManager.startExecutionTimer(sessionId);

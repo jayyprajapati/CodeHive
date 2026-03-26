@@ -268,15 +268,33 @@ export default function HomePage() {
                         </div>
                     </div>
 
-                    <div className="home-lang-strip">
-                {LANGUAGES.map((lang) => (
-                    <div className="home-lang-pill" key={lang.name}>
-                        <lang.icon size={16} style={{ color: lang.color }} />
-                        <span>{lang.name}</span>
+                    <div>
+                        <p className="home-section-subtitle">Python packages available</p>
+                        <p className="home-section-subtitle">
+                            <strong>Zero Setup Environment</strong>
+                        </p>
+                        <p className="home-section-subtitle">
+                            Pre-installed. Just import and run.
+                        </p>
                     </div>
-                ))}
-                <span className="home-lang-more">+ more coming</span>
-            </div>
+
+                    <div className="home-lang-strip" style={{ flexWrap: 'wrap' }}>
+                        {[
+                            'numpy',
+                            'pandas',
+                            'requests',
+                            'flask',
+                            'matplotlib',
+                            'scikit-learn',
+                            'pydantic',
+                            'pytest',
+                            '+ more'
+                        ].map((pkg) => (
+                            <div className="home-lang-pill" key={pkg}>
+                                <span>{pkg}</span>
+                            </div>
+                        ))}
+                    </div>
                 </div>
             </div>
 

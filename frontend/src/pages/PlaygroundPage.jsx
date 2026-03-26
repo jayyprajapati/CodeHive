@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Editor from '@monaco-editor/react';
 import Split from 'react-split';
@@ -6,7 +6,8 @@ import useSocket, { ConnectionState } from '../hooks/useSocket';
 import TerminalUI from '../components/TerminalUI';
 import StatusChip from '../components/StatusChip';
 import useStatusChips from '../hooks/useStatusChips';
-import { Play, Loader2, FileCode, ChevronDown, Check, Terminal, X, Download } from 'lucide-react';
+import { PYTHON_PACKAGES, isPackageImported } from '../utils/pythonPackages';
+import { Play, Loader2, FileCode, ChevronDown, Check, Terminal, X, Download, Package } from 'lucide-react';
 
 const LANGUAGE_TEMPLATES = {
     javascript: '// Start coding here\nconsole.log("Hello, World!");\n',
@@ -32,6 +33,10 @@ export default function PlaygroundPage() {
     const [pendingNavigation, setPendingNavigation] = useState(null);
     const [isRunning, setIsRunning] = useState(false);
     const [runBlockMessage, setRunBlockMessage] = useState('');
+    const [showPackages, setShowPackages] = useState(false);
+    const [importNotice, setImportNotice] = useState('');
+
+    const editorRef = useRef(null);
 
     const { chips, addChip, removeChip } = useStatusChips();
 
@@ -164,6 +169,48 @@ export default function PlaygroundPage() {
         setIsRunning(true);
         socket.emit('run-code', { sessionId, code, language });
     };
+
+    const handlePackageClick = (pkgName) => {
+        const pkg = PYTHON_PACKAGES[pkgName];
+        if (!pkg) return;
+
+        if (isPackageImported(code, pkgName)) {
+            setImportNotice('Package already imported.');
+            return;
+        }
+
+        const importLine = pkg.importStatement + '\n';
+        const editor = editorRef.current;
+
+        if (editor) {
+            // Insert at top of file using Monaco API
+            const model = editor.getModel();
+            if (model) {
+                const range = { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 };
+                editor.executeEdits('package-import', [{ range, text: importLine }]);
+                const newCode = model.getValue();
+                setCode(newCode);
+                if (socket && sessionId) {
+                    socket.emit('code-change', { sessionId, code: newCode });
+                }
+                return;
+            }
+        }
+
+        // Fallback: prepend to code string
+        const newCode = importLine + code;
+        setCode(newCode);
+        if (socket && sessionId) {
+            socket.emit('code-change', { sessionId, code: newCode });
+        }
+    };
+
+    // Auto-clear import notice
+    useEffect(() => {
+        if (!importNotice) return;
+        const t = setTimeout(() => setImportNotice(''), 2500);
+        return () => clearTimeout(t);
+    }, [importNotice]);
 
     const handleEndSession = () => {
         if (socket && sessionId) {
@@ -305,6 +352,7 @@ export default function PlaygroundPage() {
                         language={language}
                         value={code}
                         onChange={handleEditorChange}
+                        onMount={(editor) => { editorRef.current = editor; }}
                         theme="vs-dark"
                         options={{
                             minimap: { enabled: false },
@@ -340,6 +388,35 @@ export default function PlaygroundPage() {
                     </div>
                 </div>
             </Split>
+
+            {/* Python Package Dropdown */}
+            {language === 'python' && (
+                <div className="sandbox-packages-wrapper">
+                    <button className="sandbox-packages-toggle" onClick={() => setShowPackages(!showPackages)}>
+                        <Package size={13} />
+                        <span>Available Packages</span>
+                        <ChevronDown size={13} className={showPackages ? 'sandbox-packages-chevron--open' : ''} />
+                    </button>
+                    {importNotice && (
+                        <span className="sandbox-packages-notice">{importNotice}</span>
+                    )}
+                    {showPackages && (
+                        <div className="sandbox-packages-list">
+                            {Object.entries(PYTHON_PACKAGES).map(([name, pkg]) => (
+                                <button
+                                    key={name}
+                                    className="sandbox-package-item"
+                                    onClick={() => handlePackageClick(name)}
+                                    title={`Insert: ${pkg.importStatement}`}
+                                >
+                                    <span className="sandbox-package-name">{name}</span>
+                                    <span className="sandbox-package-version">v{pkg.version}</span>
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            )}
 
             {/* Status Bar */}
             <div className="sandbox-statusbar">
