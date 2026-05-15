@@ -31,4 +31,6 @@ RUN pip install --no-cache-dir \
     pillow \
     tabulate
 
+RUN ln -sf /usr/local/bin/python3 /usr/local/bin/python
+
 CMD ["/bin/sh"]

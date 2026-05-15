@@ -33,8 +33,8 @@ const SUPPORTED_LANGUAGES = {
   javascript: { file: 'main.js', run: 'node main.js', image: 'node:20-alpine' },
   python: {
     file: 'main.py',
-    run: 'python main.py',
-    image: process.env.PYTHON_EXECUTION_IMAGE || 'codehive-python:latest'
+    run: 'python3 main.py',
+    image: 'codehive-python:latest'
   },
   java: { file: 'Code.java', run: 'javac Code.java && java Code', image: 'amazoncorretto:17-alpine' }
 };
@@ -301,9 +301,10 @@ const initSocket = (httpServer) => {
         await ensureTerminal(sessionId, langConfig.image);
         await executionManager.registerClient(sessionId, terminalHooks(sessionId));
 
-        // Listen for execution timeout events from this session
+        // Guard ensures these are registered once per container session (playground is always a new session)
         const execSession = executionManager.sessions.get(sessionId);
-        if (execSession) {
+        if (execSession && !execSession.roomListenersRegistered) {
+          execSession.roomListenersRegistered = true;
           execSession.emitter.on('execution_timeout', () => {
             io.to(sessionId).emit('terminal-error', {
               sessionId,
@@ -495,9 +496,11 @@ const initSocket = (httpServer) => {
           incrementSessionCount();
         }
 
-        // Listen for execution timeout / OOM events from this session
+        // Register room-level execution event listeners once per container session.
+        // Guard prevents duplicate registrations when multiple users join the same room.
         const execSession = executionManager.sessions.get(sessionId);
-        if (execSession) {
+        if (execSession && !execSession.roomListenersRegistered) {
+          execSession.roomListenersRegistered = true;
           execSession.emitter.on('execution_timeout', () => {
             io.to(sessionId).emit('terminal-error', {
               sessionId,
@@ -1120,7 +1123,9 @@ const initSocket = (httpServer) => {
               code: 'NOT_IN_SESSION'
             });
           }
-          await ensureTerminal(sessionId);
+          const playgroundLanguage = pg.language || DEFAULT_LANGUAGE;
+          const playgroundLangConfig = SUPPORTED_LANGUAGES[playgroundLanguage] || SUPPORTED_LANGUAGES[DEFAULT_LANGUAGE];
+          await ensureTerminal(sessionId, playgroundLangConfig.image);
           await executionManager.write(sessionId, input);
           return;
         }
@@ -1156,7 +1161,9 @@ const initSocket = (httpServer) => {
           });
         }
 
-        await ensureTerminal(sessionId);
+        const sessionLanguage = session.language || DEFAULT_LANGUAGE;
+        const sessionLangConfig = SUPPORTED_LANGUAGES[sessionLanguage] || SUPPORTED_LANGUAGES[DEFAULT_LANGUAGE];
+        await ensureTerminal(sessionId, sessionLangConfig.image);
         await executionManager.write(sessionId, input);
 
       } catch (error) {
@@ -1231,17 +1238,18 @@ const initSocket = (httpServer) => {
     // Workspace File Operations (Both Modes)
     // ========================================================================
 
-    const sanitizeWorkspacePath = (filename) => {
-      // Prevent directory traversal
+    const sanitizeWorkspacePath = (sessionId, filename) => {
+      // Prevent directory traversal; resolve against the session's actual workspace dir
       const cleaned = filename.replace(/\.\./g, '').replace(/^\/+/, '');
-      return `/workspace/${cleaned}`;
+      const workDir = executionManager.getWorkingDir(sessionId);
+      return `${workDir}/${cleaned}`;
     };
 
     socket.on('workspace-create-file', async (data = {}) => {
       try {
         const { sessionId, filename } = data;
         if (!sessionId || !filename) return;
-        const safePath = sanitizeWorkspacePath(filename);
+        const safePath = sanitizeWorkspacePath(sessionId, filename);
         await executionManager.execInContainer(sessionId, `touch "${safePath}"`);
         socket.emit('workspace-operation-result', { success: true, operation: 'createFile', filename });
       } catch (error) {
@@ -1254,7 +1262,7 @@ const initSocket = (httpServer) => {
       try {
         const { sessionId, folder } = data;
         if (!sessionId || !folder) return;
-        const safePath = sanitizeWorkspacePath(folder);
+        const safePath = sanitizeWorkspacePath(sessionId, folder);
         await executionManager.execInContainer(sessionId, `mkdir -p "${safePath}"`);
         socket.emit('workspace-operation-result', { success: true, operation: 'createFolder', folder });
       } catch (error) {
@@ -1267,7 +1275,7 @@ const initSocket = (httpServer) => {
       try {
         const { sessionId, filename } = data;
         if (!sessionId || !filename) return;
-        const safePath = sanitizeWorkspacePath(filename);
+        const safePath = sanitizeWorkspacePath(sessionId, filename);
         await executionManager.execInContainer(sessionId, `rm -f "${safePath}"`);
         socket.emit('workspace-operation-result', { success: true, operation: 'deleteFile', filename });
       } catch (error) {
@@ -1280,8 +1288,8 @@ const initSocket = (httpServer) => {
       try {
         const { sessionId, oldName, newName } = data;
         if (!sessionId || !oldName || !newName) return;
-        const safeOld = sanitizeWorkspacePath(oldName);
-        const safeNew = sanitizeWorkspacePath(newName);
+        const safeOld = sanitizeWorkspacePath(sessionId, oldName);
+        const safeNew = sanitizeWorkspacePath(sessionId, newName);
         await executionManager.execInContainer(sessionId, `mv "${safeOld}" "${safeNew}"`);
         socket.emit('workspace-operation-result', { success: true, operation: 'renameFile', oldName, newName });
       } catch (error) {
@@ -1294,7 +1302,7 @@ const initSocket = (httpServer) => {
       try {
         const { sessionId, filename } = data;
         if (!sessionId || !filename) return;
-        const safePath = sanitizeWorkspacePath(filename);
+        const safePath = sanitizeWorkspacePath(sessionId, filename);
         const content = await executionManager.execInContainer(sessionId, `cat "${safePath}"`);
         socket.emit('workspace-file-content', { success: true, filename, content });
       } catch (error) {
@@ -1307,7 +1315,7 @@ const initSocket = (httpServer) => {
       try {
         const { sessionId, filename, content } = data;
         if (!sessionId || !filename) return;
-        const safePath = sanitizeWorkspacePath(filename);
+        const safePath = sanitizeWorkspacePath(sessionId, filename);
         // Use heredoc to safely write content with special characters
         const delimiter = `HEREDOC_${Date.now()}`;
         const cmd = `cat > "${safePath}" << '${delimiter}'\n${content || ''}\n${delimiter}`;
@@ -1345,12 +1353,12 @@ const initSocket = (httpServer) => {
           if (!SUPPORTED_LANGUAGES[language] && language) {
             io.to(sessionId).emit('terminal-output', {
               sessionId,
-              output: `[server] Language ${language} not enabled; using ${langKey}.\n`
+              output: `[server] Language '${language}' not supported; using ${langKey}.\n`
             });
           }
 
           if (!isCodeSafe(code, langKey)) {
-            logger.warn('code_execution_blocked: unsafe_code', { sessionId, language: langKey });
+            logger.warn('code_execution_blocked_unsafe', { sessionId, language: langKey });
             return io.to(sessionId).emit('terminal-output', {
               sessionId,
               output: 'Error: Code contains prohibited patterns\n'
@@ -1358,41 +1366,31 @@ const initSocket = (httpServer) => {
           }
 
           await ensureTerminal(sessionId, langConfig.image);
+          logger.debug('code_execution_starting', { sessionId, language: langKey, image: langConfig.image });
 
-          // Start execution timer — will SIGINT then SIGKILL on timeout
+          io.to(sessionId).emit('execution-started', { sessionId, language: langKey });
+
+          // Write code file via exec (clean — no PTY, no echo)
+          const delimiter = `CODEHIVE_${Date.now()}_END`;
+          await executionManager.execInContainer(
+            sessionId,
+            `cat > '${langConfig.file}' << '${delimiter}'\n${code}\n${delimiter}`
+          );
+
+          // Run via exec-stream: output is exact program output, no PTY pollution
           const execTimer = executionManager.startExecutionTimer(sessionId);
 
-          const sentinel = `__EXEC_DONE_${Date.now()}__`;
-          const delimiter = `EOF_${Date.now()}`;
-          const commands = [
-            `cat > ${langConfig.file} << '${delimiter}'`,
-            code,
-            delimiter,
-            `${langConfig.run}; echo "${sentinel}"`
-          ].join('\n');
-
-          // Listen for sentinel to know execution finished
-          const session = executionManager.sessions.get(sessionId);
-          if (session) {
-            const onData = (chunk) => {
-              const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
-              if (text.includes(sentinel)) {
-                session.emitter.off('data', onData);
-                execTimer.cancel();
-                io.to(sessionId).emit('execution-complete', { sessionId });
-                logger.debug('playground_code_execution_complete', { sessionId });
-              }
-            };
-            session.emitter.on('data', onData);
-            // Safety fallback: cancel listener if execution timer fires
-            session.emitter.once('execution_timeout', () => {
-              session.emitter.off('data', onData);
+          await executionManager.execStream(
+            sessionId,
+            langConfig.run,
+            (output) => io.to(sessionId).emit('terminal-output', { sessionId, output }),
+            (err) => {
+              execTimer.cancel();
+              if (err) logger.warn('playground_exec_stream_error', { sessionId, error: err.message });
               io.to(sessionId).emit('execution-complete', { sessionId });
-            });
-          }
-
-          await executionManager.write(sessionId, commands + '\n');
-          io.to(sessionId).emit('execution-started', { sessionId, language: langKey });
+              logger.debug('playground_code_execution_complete', { sessionId });
+            }
+          );
 
           logger.debug('playground_code_execution_started', { sessionId, language: langKey });
           return;
@@ -1430,12 +1428,12 @@ const initSocket = (httpServer) => {
         if (!SUPPORTED_LANGUAGES[language] && language) {
           io.to(sessionId).emit('terminal-output', {
             sessionId,
-            output: `[server] Language ${language} not enabled; using ${langKey}.\n`
+            output: `[server] Language '${language}' not supported; using ${langKey}.\n`
           });
         }
 
         if (!isCodeSafe(code, langKey)) {
-          logger.warn('code_execution_blocked: unsafe_code', { sessionId, language: langKey });
+          logger.warn('code_execution_blocked_unsafe', { sessionId, language: langKey });
           return io.to(sessionId).emit('terminal-output', {
             sessionId,
             output: 'Error: Code contains prohibited patterns\n'
@@ -1443,41 +1441,31 @@ const initSocket = (httpServer) => {
         }
 
         await ensureTerminal(sessionId, langConfig.image);
+        logger.debug('code_execution_starting', { sessionId, language: langKey, image: langConfig.image });
 
-        // Start execution timer — will SIGINT then SIGKILL on timeout
+        io.to(sessionId).emit('execution-started', { sessionId, language: langKey });
+
+        // Write code file via exec (clean — no PTY, no echo)
+        const delimiter = `CODEHIVE_${Date.now()}_END`;
+        await executionManager.execInContainer(
+          sessionId,
+          `cat > '${langConfig.file}' << '${delimiter}'\n${code}\n${delimiter}`
+        );
+
+        // Run via exec-stream: output is exact program output, no PTY pollution
         const execTimer = executionManager.startExecutionTimer(sessionId);
 
-        const sentinel = `__EXEC_DONE_${Date.now()}__`;
-        const delimiter = `EOF_${Date.now()}`;
-        const commands = [
-          `cat > ${langConfig.file} << '${delimiter}'`,
-          code,
-          delimiter,
-          `${langConfig.run}; echo "${sentinel}"`
-        ].join('\n');
-
-        // Listen for sentinel to know execution finished
-        const execSession = executionManager.sessions.get(sessionId);
-        if (execSession) {
-          const onData = (chunk) => {
-            const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
-            if (text.includes(sentinel)) {
-              execSession.emitter.off('data', onData);
-              execTimer.cancel();
-              io.to(sessionId).emit('execution-complete', { sessionId });
-              logger.debug('code_execution_complete', { sessionId });
-            }
-          };
-          execSession.emitter.on('data', onData);
-          // Safety fallback: cancel listener if execution timer fires
-          execSession.emitter.once('execution_timeout', () => {
-            execSession.emitter.off('data', onData);
+        await executionManager.execStream(
+          sessionId,
+          langConfig.run,
+          (output) => io.to(sessionId).emit('terminal-output', { sessionId, output }),
+          (err) => {
+            execTimer.cancel();
+            if (err) logger.warn('collab_exec_stream_error', { sessionId, error: err.message });
             io.to(sessionId).emit('execution-complete', { sessionId });
-          });
-        }
-
-        await executionManager.write(sessionId, commands + '\n');
-        io.to(sessionId).emit('execution-started', { sessionId, language: langKey });
+            logger.debug('code_execution_complete', { sessionId });
+          }
+        );
 
         logger.debug('code_execution_started', { sessionId, language: langKey });
 

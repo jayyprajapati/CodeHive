@@ -240,7 +240,9 @@ class ExecutionManager {
       lifetimeTimer,
       executionTimer: null,
       executionGraceTimer: null,
-      destroyed: false
+      destroyed: false,
+      workingDir,
+      roomListenersRegistered: false
     };
 
     this.sessions.set(sessionId, session);
@@ -433,7 +435,9 @@ class ExecutionManager {
     const exec = await session.container.exec({
       Cmd: ['/bin/sh', '-c', cmd],
       AttachStdout: true,
-      AttachStderr: true
+      AttachStderr: true,
+      Tty: true,
+      WorkingDir: session.workingDir
     });
 
     return new Promise((resolve, reject) => {
@@ -448,6 +452,61 @@ class ExecutionManager {
         stream.on('error', reject);
       });
     });
+  }
+
+  // --------------------------------------------------------------------------
+  // Streaming exec — for code execution with clean output (no PTY echo)
+  // --------------------------------------------------------------------------
+
+  /**
+   * Run a shell command inside the container and stream its output via callbacks.
+   * Uses docker exec (not the PTY shell), so there is no echo, no PS1 prompt,
+   * and no heredoc noise — output is exactly what the program writes to stdout/stderr.
+   *
+   * @param {string} sessionId
+   * @param {string} cmd  Shell command to run (passed to /bin/sh -c)
+   * @param {function(string):void} onChunk  Called for each chunk of output
+   * @param {function(Error|null):void} onEnd  Called when the process exits
+   */
+  async execStream(sessionId, cmd, onChunk, onEnd) {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.destroyed) {
+      throw new Error('No active session');
+    }
+
+    const exec = await session.container.exec({
+      Cmd: ['/bin/sh', '-c', cmd],
+      AttachStdout: true,
+      AttachStderr: true,
+      Tty: true,
+      WorkingDir: session.workingDir
+    });
+
+    await new Promise((resolve, reject) => {
+      exec.start({ hijack: true, stdin: false }, (err, stream) => {
+        if (err) return reject(err);
+
+        // Resolve immediately — stream is live, callbacks fire asynchronously.
+        resolve();
+
+        stream.on('data', (chunk) => {
+          const text = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk ?? '');
+          if (text) onChunk(text);
+        });
+
+        stream.on('end', () => onEnd(null));
+        stream.on('error', (err) => onEnd(err));
+      });
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // Helpers
+  // --------------------------------------------------------------------------
+
+  /** Return the container's writable workspace path for this session. */
+  getWorkingDir(sessionId) {
+    return this.sessions.get(sessionId)?.workingDir ?? '/home/codeuser/workspace';
   }
 
   // --------------------------------------------------------------------------
